@@ -300,7 +300,6 @@ Writing `xmp:Rating` and `xmp:Label` sidecars in place would let Lightroom Class
 FastCull/
 ├── Models/
 │   ├── PhotoItem.cs           # path, rel_path, format, companions, sort time, flag, stars, metadata
-│   ├── RatingState.cs         # Flag enum + Stars int (two axes, not one enum)
 │   ├── FormatFamily.cs        # Raw, Jpeg, Heif, Png, Tiff, Other
 ├── Services/
 │   ├── FormatRegistry.cs      # extension -> family -> decoder mapping, single source of truth

@@ -5,3 +5,5 @@ obj/
 *.db-wal
 *.db-shm
 .vs/
+graphify-out/ 
+Design/
