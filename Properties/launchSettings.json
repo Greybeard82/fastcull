@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "Fastcull (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "Fastcull (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
