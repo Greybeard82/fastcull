@@ -14,6 +14,7 @@
 
     <UserControl.Resources>
         <conv:BoolToAccentBrushConverter x:Key="ActiveToBrushConverter"/>
+        <conv:ThumbnailFailedToVisibilityConverter x:Key="ThumbnailFailedToVisibilityConverter"/>
     </UserControl.Resources>
 
     <Grid RowDefinitions="*,Auto">
@@ -26,36 +27,54 @@
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="6">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
-                    <TextBlock Text="{x:Bind ViewModel.PreviousItem.FileName, Mode=OneWay}"
-                               HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Text="{x:Bind ViewModel.PreviousItem.FormatLabel, Mode=OneWay}"
-                               FontSize="11" Opacity="0.7" HorizontalAlignment="Center"/>
-                </StackPanel>
+                <Grid>
+                    <Image Source="{x:Bind ViewModel.PreviousItem.Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                    <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                               Visibility="{x:Bind ViewModel.PreviousItem, Mode=OneWay, Converter={StaticResource ThumbnailFailedToVisibilityConverter}}"/>
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
+                        <TextBlock Text="{x:Bind ViewModel.PreviousItem.FileName, Mode=OneWay}"
+                                   HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{x:Bind ViewModel.PreviousItem.FormatLabel, Mode=OneWay}"
+                                   FontSize="11" Opacity="0.7" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
             </Border>
 
             <Border Grid.Column="1"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
                     BorderThickness="3" CornerRadius="6">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" Margin="16">
-                    <TextBlock Text="{x:Bind ViewModel.ActiveItem.FileName, Mode=OneWay}"
-                               FontSize="18" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Text="{x:Bind ViewModel.ActiveItem.FormatLabel, Mode=OneWay}"
-                               FontSize="13" Opacity="0.75" HorizontalAlignment="Center"/>
-                </StackPanel>
+                <Grid>
+                    <Image Source="{x:Bind ViewModel.ActiveItem.Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                    <TextBlock Text="&#x26A0;" FontSize="36" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                               Visibility="{x:Bind ViewModel.ActiveItem, Mode=OneWay, Converter={StaticResource ThumbnailFailedToVisibilityConverter}}"/>
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" Margin="16">
+                        <TextBlock Text="{x:Bind ViewModel.ActiveItem.FileName, Mode=OneWay}"
+                                   FontSize="18" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{x:Bind ViewModel.ActiveItem.FormatLabel, Mode=OneWay}"
+                                   FontSize="13" Opacity="0.75" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
             </Border>
 
             <Border Grid.Column="2" Tapped="NextSlot_Tapped" Opacity="0.55"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="6">
-                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
-                    <TextBlock Text="{x:Bind ViewModel.NextItem.FileName, Mode=OneWay}"
-                               HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                    <TextBlock Text="{x:Bind ViewModel.NextItem.FormatLabel, Mode=OneWay}"
-                               FontSize="11" Opacity="0.7" HorizontalAlignment="Center"/>
-                </StackPanel>
+                <Grid>
+                    <Image Source="{x:Bind ViewModel.NextItem.Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                    <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                               Visibility="{x:Bind ViewModel.NextItem, Mode=OneWay, Converter={StaticResource ThumbnailFailedToVisibilityConverter}}"/>
+                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
+                        <TextBlock Text="{x:Bind ViewModel.NextItem.FileName, Mode=OneWay}"
+                                   HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{x:Bind ViewModel.NextItem.FormatLabel, Mode=OneWay}"
+                                   FontSize="11" Opacity="0.7" HorizontalAlignment="Center"/>
+                    </StackPanel>
+                </Grid>
             </Border>
         </Grid>
 
@@ -81,12 +100,18 @@
                                 BorderThickness="2"
                                 BorderBrush="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource ActiveToBrushConverter}}"
                                 CornerRadius="4">
-                            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="3" Margin="8">
-                                <TextBlock Text="{x:Bind FileName}" FontSize="11"
-                                           TextTrimming="CharacterEllipsis" HorizontalAlignment="Center"/>
-                                <TextBlock Text="{x:Bind FormatLabel}" FontSize="9"
-                                           Opacity="0.65" HorizontalAlignment="Center"/>
-                            </StackPanel>
+                            <Grid>
+                                <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                                <TextBlock Text="&#x26A0;" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           Foreground="{ThemeResource SystemFillColorCriticalBrush}"
+                                           Visibility="{x:Bind ThumbnailFailed, Mode=OneWay}"/>
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="3" Margin="8">
+                                    <TextBlock Text="{x:Bind FileName}" FontSize="11"
+                                               TextTrimming="CharacterEllipsis" HorizontalAlignment="Center"/>
+                                    <TextBlock Text="{x:Bind FormatLabel}" FontSize="9"
+                                               Opacity="0.65" HorizontalAlignment="Center"/>
+                                </StackPanel>
+                            </Grid>
                         </Border>
                     </DataTemplate>
                 </ItemsRepeater.ItemTemplate>
