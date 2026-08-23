@@ -66,11 +66,15 @@ namespace Fastcull.Views
 
         private void Thumbnail_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            if (sender is FrameworkElement { DataContext: FilmstripItemViewModel item })
-            {
-                ViewModel.SetActiveIndex(item.Index);
-                CenterOn(item.Index);
-            }
+            // ItemsRepeater does not propagate DataContext to realized elements when the
+            // DataTemplate uses x:Bind/x:DataType, so the item must be resolved through the
+            // repeater itself rather than through sender.DataContext (which is always null here).
+            if (sender is not UIElement element) return;
+            var index = ThumbRepeater.GetElementIndex(element);
+            if (index < 0) return;
+
+            ViewModel.SetActiveIndex(index);
+            CenterOn(index);
         }
 
         private void CenterOn(int index)
