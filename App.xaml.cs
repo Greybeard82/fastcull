@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -34,7 +35,28 @@ namespace Fastcull
         /// </summary>
         public App()
         {
+            // Last-resort net, not a substitute for guarding call sites: catches exceptions of
+            // this general shape (thrown across a XAML/native callback boundary, or in a Task
+            // nobody awaited) that would otherwise fail-fast the whole process instead of
+            // raising a normal catchable exception. See Converters/BoolToAccentBrushConverter.cs
+            // and ViewModels/FilmstripItemViewModel.cs for the actual fixes at the two known
+            // unguarded call sites.
+            UnhandledException += OnUnhandledException;
+            TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
+
             InitializeComponent();
+        }
+
+        private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FastCull] Unhandled exception: {e.Exception}");
+            e.Handled = true;
+        }
+
+        private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
+        {
+            System.Diagnostics.Debug.WriteLine($"[FastCull] Unobserved task exception: {e.Exception}");
+            e.SetObserved();
         }
 
         /// <summary>
