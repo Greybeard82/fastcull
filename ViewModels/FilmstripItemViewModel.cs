@@ -127,6 +127,18 @@ namespace Fastcull.ViewModels
                 return;
             }
 
+            // NOTE: the SoftwareBitmap is deliberately NOT disposed once SetBitmapAsync has
+            // succeeded. Assigning the SoftwareBitmapSource to an Image starts an ASYNCHRONOUS
+            // copy of the pixels into a composition surface, which XAML runs on its own native
+            // worker thread. Disposing the bitmap here destroyed it out from under that copy,
+            // and the resulting COM failure was stowed and fail-fasted the process - exit code
+            // 0xC000027B, with this native stack from C:\dumps\Fastcull.exe_260823_034244.dmp:
+            //     Microsoft_UI_Xaml!AsyncCopyToSurfaceTask::CopyOperation
+            //     Microsoft_UI_Xaml!AsyncCopyToSurfaceTask::Execute
+            //     Microsoft_UI_Xaml!AsyncImageFactory::WorkCallback
+            //     ntdll!TppWorkerThread
+            // The bitmap's lifetime therefore belongs to the SoftwareBitmapSource from here on;
+            // it is reclaimed by the GC/finalizer. (A real LRU cache lands with PRD 3.3.)
             var enqueued = _dispatcherQueue.TryEnqueue(() =>
             {
                 try
@@ -135,19 +147,13 @@ namespace Fastcull.ViewModels
                 }
                 catch (Exception)
                 {
-                    setFailed();
-                }
-                finally
-                {
-                    bitmap.Dispose();
+                    try { setFailed(); } catch { }
                 }
             });
 
             if (!enqueued)
             {
-                // Queue isn't accepting work (e.g. shutting down) - the callback above never
-                // runs, so nothing else will dispose this native bitmap.
-                bitmap.Dispose();
+                _dispatcherQueue.TryEnqueue(() => { try { setFailed(); } catch { } });
             }
         }
     }
