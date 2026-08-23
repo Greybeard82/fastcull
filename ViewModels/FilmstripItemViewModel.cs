@@ -25,9 +25,7 @@ namespace Fastcull.ViewModels
             Index = index;
             _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
 
-            // RAW stays blank until LibRaw is wired up (a later task) - never attempted here,
-            // so it never shows either *Failed error state either.
-            if (photo.Family is FormatFamily.Jpeg or FormatFamily.Png)
+            if (photo.Family is FormatFamily.Jpeg or FormatFamily.Png or FormatFamily.Raw)
             {
                 _ = LoadThumbnailAsync(_loadCts.Token);
                 _ = LoadDisplayImageAsync(_loadCts.Token);
@@ -104,11 +102,45 @@ namespace Fastcull.ViewModels
             _loadCts.Dispose();
         }
 
+        /// <summary>
+        /// RAW goes through RawPreviewDecoder, which lifts the embedded JPEG preview out of the
+        /// container rather than debayering (PRD 3.2 needs only the thumbnail and display tiers,
+        /// and both are already present as JPEG inside .ARW/.CR2). If that returns null the file
+        /// gets one attempt through WIC, which can decode RAW directly but only when the Store
+        /// Raw Image Extension happens to be installed - a fallback, never the primary path.
+        /// Anything still null lands on the error placeholder: PRD 1.1 says a file that fails to
+        /// decode is shown as such, never silently dropped.
+        /// </summary>
+        private Task<SoftwareBitmap?> DecodeTierAsync(bool displayTier, CancellationToken cancellationToken)
+        {
+            if (Photo.Family != FormatFamily.Raw)
+            {
+                return displayTier
+                    ? ThumbnailService.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken)
+                    : ThumbnailService.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
+            }
+
+            return DecodeRawWithFallbackAsync(displayTier, cancellationToken);
+        }
+
+        private async Task<SoftwareBitmap?> DecodeRawWithFallbackAsync(bool displayTier, CancellationToken cancellationToken)
+        {
+            var bitmap = displayTier
+                ? await RawPreviewDecoder.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken)
+                : await RawPreviewDecoder.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
+
+            if (bitmap is not null) return bitmap;
+
+            return displayTier
+                ? await ThumbnailService.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken)
+                : await ThumbnailService.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
+        }
+
         private async Task LoadThumbnailAsync(CancellationToken cancellationToken)
         {
             try
             {
-                var bitmap = await ThumbnailService.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
+                var bitmap = await DecodeTierAsync(displayTier: false, cancellationToken);
                 await ApplyDecodeResultAsync(bitmap, b => Thumbnail = b, () => ThumbnailFailed = true);
             }
             catch (OperationCanceledException)
@@ -125,7 +157,7 @@ namespace Fastcull.ViewModels
         {
             try
             {
-                var bitmap = await ThumbnailService.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken);
+                var bitmap = await DecodeTierAsync(displayTier: true, cancellationToken);
                 await ApplyDecodeResultAsync(bitmap, b => DisplayImage = b, () => DisplayImageFailed = true);
             }
             catch (OperationCanceledException)

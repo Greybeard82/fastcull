@@ -25,8 +25,8 @@ namespace Fastcull.Services
     /// </summary>
     public static class ThumbnailService
     {
-        private const uint ThumbnailLongEdge = 160;
-        private const uint DisplayLongEdge = 960;
+        internal const uint ThumbnailLongEdge = 160;
+        internal const uint DisplayLongEdge = 960;
 
         public static Task<SoftwareBitmap?> DecodeThumbnailAsync(string filePath, CancellationToken cancellationToken = default)
             => DecodeScaledAsync(filePath, ThumbnailLongEdge, cancellationToken);
@@ -42,6 +42,29 @@ namespace Fastcull.Services
                 using var stream = await FileRandomAccessStream.OpenAsync(filePath, FileAccessMode.Read)
                     .AsTask().ConfigureAwait(false);
 
+                return await DecodeScaledFromStreamAsync(stream, longEdge, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Shared scaled-decode used by both the WIC file path above and
+        /// <see cref="RawPreviewDecoder"/>, which hands in an in-memory stream wrapping a JPEG
+        /// preview lifted out of a RAW container. Returns null on any decode failure; propagates
+        /// cancellation. The same never-race-a-WinRT-call rule as above applies.
+        /// </summary>
+        public static async Task<SoftwareBitmap?> DecodeScaledFromStreamAsync(
+            IRandomAccessStream stream, uint longEdge, CancellationToken cancellationToken)
+        {
+            try
+            {
                 cancellationToken.ThrowIfCancellationRequested();
                 var decoder = await BitmapDecoder.CreateAsync(stream).AsTask().ConfigureAwait(false);
 
