@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    The PRD 3.5 perf harness. Deliberately a plain console app referencing Fastcull.Core and
+    nothing else: almost everything worth measuring (scan, header parse, both decode tiers, the
+    cull ladder) is already WinUI-free, so the harness needs no dispatcher, no window, and no
+    MSIX packaging. That keeps it fast, deterministic, and runnable from a command line as the
+    CI-style regression gate PRD 3.5 asks for ("a regression greater than 25% fails the build"),
+    rather than a UI-timing tool.
+
+    No benchmarking framework - see docs/benchmarks/2026-08-23-baseline.md for why Stopwatch
+    against the PRD's absolute budgets fits this project better than BenchmarkDotNet.
+
+    Windows TFM matches Fastcull.Core: WIC comes from the Windows SDK projection
+    (Windows.Graphics.Imaging), not from WinUI, so nothing here touches XAML.
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <UseWinUI>false</UseWinUI>
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Fastcull.Core\Fastcull.Core.csproj" />
+  </ItemGroup>
+
+</Project>

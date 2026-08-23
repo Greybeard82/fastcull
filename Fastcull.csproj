@@ -26,11 +26,11 @@
   <!-- The sibling projects live under this project's directory, so the SDK's default globs
        would otherwise pull their sources into this assembly. -->
   <ItemGroup>
-    <Compile Remove="Fastcull.Tests\**;Fastcull.Core\**" />
-    <None Remove="Fastcull.Tests\**;Fastcull.Core\**" />
-    <Page Remove="Fastcull.Tests\**;Fastcull.Core\**" />
-    <PRIResource Remove="Fastcull.Tests\**;Fastcull.Core\**" />
-    <Content Remove="Fastcull.Tests\**;Fastcull.Core\**" />
+    <Compile Remove="Fastcull.Tests\**;Fastcull.Core\**;Fastcull.Benchmarks\**" />
+    <None Remove="Fastcull.Tests\**;Fastcull.Core\**;Fastcull.Benchmarks\**" />
+    <Page Remove="Fastcull.Tests\**;Fastcull.Core\**;Fastcull.Benchmarks\**" />
+    <PRIResource Remove="Fastcull.Tests\**;Fastcull.Core\**;Fastcull.Benchmarks\**" />
+    <Content Remove="Fastcull.Tests\**;Fastcull.Core\**;Fastcull.Benchmarks\**" />
   </ItemGroup>
 
   <ItemGroup>
