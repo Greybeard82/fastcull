@@ -87,10 +87,15 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
 ### 1.5 Layout
 - **Sidebar (left):** auto-hides on pointer exit, pinnable. Contains folder tree, file counts, live rating tallies, format breakdown, and **Finish Session**.
 - **Filmstrip:** virtualized horizontal scroller sized for 21:9 and 32:9. Active image scales to viewport height, neighbours flank left and right at reduced height.
-- **State border:** red = rejected, yellow = unrated, green = picked. The star count renders as a numeric badge in the **bottom-right** of the photo, shown only when stars >= 1.
-- **Active indicator:** the active photo carries an additional **blue border drawn immediately outside the state border, at the same thickness**. State colour and active-ness are therefore never confused — they are two concentric rings.
+- **State mark (Chromeless):** state reads as a **3px weight bar directly beneath the photo**, spanning its full rendered width — neutral grey when unrated, green when picked, red-brown when rejected. Stars render as a run of `★` in the caption row beside the filename. There are **no borders around photos anywhere in the app**.
+- **Active indicator:** the active photo carries a **thin accent tick above it**, 2px tall and 18% of the photo's rendered width, centred. The active photo's filename also brightens to the accent tone while the flanking two stay muted. State and active-ness are therefore never confused — one reads below the photo, the other above it.
 - **Three-slot window rule:** the top region always shows three consecutive photos. The active photo is the **centre** slot, except at the sequence boundaries: when the active photo is the **first** in the sequence the active marker sits on the **left** slot, and when it is the **last** it sits on the **right** slot. The window itself does not scroll past either end.
-- A small format chip (`ARW`, `JPG`, `PNG`) sits on each filmstrip item. In a mixed folder you need to know what you are looking at without opening the HUD.
+- **Stage spacing:** photos sit **5px apart** with **8px outer horizontal padding**, so the stage runs nearly the full window width. This is deliberate — the goal is maximum photo real estate. Vertical padding is *not* squeezed to match: it carries the accent tick above and the weight bar and caption below, which are the entire state read in this design.
+- **Equal-height rule:** all three photos are drawn at one shared height, `min(availableCellHeight, availableCellWidth / widestVisibleAspect)`, with each photo's width following its own aspect at that height. Nothing is ever cropped, and a portrait frame simply sits narrower beside a landscape one. Rotation (§1.11) feeds this rule its *post-rotation* aspect.
+
+> **Superseded:** this section previously described concentric red/yellow/green state borders with an outer blue active ring, and a numeric star badge in the photo's bottom-right corner. That was the pre-Chromeless visual pass. The borders are gone, replaced by the weight bar and accent tick above.
+
+- A small format chip (`ARW`, `JPG`, `PNG`) on each filmstrip item was specified here so a mixed folder is legible without the HUD. **The Chromeless direction drops it**, and the HUD that would replace it is v0.2 — so format is currently not visible anywhere in the UI. Open point, not a decision.
 
 ### 1.6 Rating Model
 
@@ -164,6 +169,21 @@ FastCull renders on a true-black surface. Every pixel that is not photograph con
 
 Consequences: the app forces dark theme regardless of the system setting, and uses no Mica, Acrylic or other system backdrop, since all of them tint with the desktop wallpaper and can never be fully black. Text and chrome use light foregrounds chosen for legibility against pure black.
 
+Controls are held to the same rule in **every visual state**, not just at rest. The rotate buttons (§1.11) use a custom borderless template because the stock WinUI `Button` paints near-black greys on hover and press; theirs paints no background in any state and expresses hover and press purely as glyph brightness.
+
+### 1.11 Rotation
+
+A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied to the **selected** photo.
+
+- `A` turns 90° **clockwise**; `S` turns 90° **counter-clockwise**. Both wrap: four turns in either direction return the photo to where it started. Note that `A` sits physically left of `S` while meaning "right" — this is deliberate.
+- Two small buttons in the caption row beneath the **centre** slot, right-aligned, do the same thing. They stay under the centre slot regardless, but always act on whatever photo is **active** — which is an end slot at the sequence boundaries, per §1.5's three-slot rule.
+- **Rotation is a delta on top of whatever orientation the decode produced, never an absolute orientation of the final image.** The decoded baseline is not uniform across formats today — WIC applies EXIF orientation for JPEG and friends but not for RAW (see §7) — so a delta is the only thing that means the same in both cases. Note the corollary: if the RAW baseline is fixed later, a delta stored against the *old* baseline for an affected file becomes wrong. See §7 for the bounded set that applies to.
+- **It is a display transform and never a re-decode.** Re-decoding would spend a decode on a transform, blow the §3.5 keypress budget, and invalidate cache entries once §3.3 exists.
+- Rotation **does not alter the cull state and does not move the cursor.** Rating and rotation are fully independent axes, and a write to one never disturbs the other in the database (§3.1).
+- It applies to **both** the stage photo and its filmstrip thumbnail. A photo rotated on stage that stays sideways in the strip is a bug.
+- A quarter turn inverts the photo's aspect, so the equal-height rule in §1.5 is fed the post-rotation aspect. Rotating one photo can therefore resize its two neighbours, because that rule sizes to the widest photo visible.
+- Rotation **persists across sessions and app restarts**, exactly as ratings do (§3.1).
+
 ---
 
 ## 2. Control Matrix
@@ -179,13 +199,17 @@ Consequences: the app forces dark theme regardless of the system setting, and us
 | `C` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
 | `Z` | Set `Rejected` — ladder index 0, clears stars |
 | `X` | Set `Unrated` (`Unflagged`) — ladder index 1, clears stars |
+| `A` | Rotate the selected photo 90° **clockwise** (§1.11) |
+| `S` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
 | `Home` / `End` | First / last photo |
 | `Space` | Enter zoom mode |
 | `I` | Toggle metadata HUD |
 | `Delete` | Move file group to Recycle Bin (undoable) |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 
-The three flag keys sit together under the left hand, next to each other on a QWERTY keyboard, so the whole ladder can be driven without looking down: `Z` rejects, `X` clears to unrated, `C` picks.
+The three flag keys sit together under the left hand, next to each other on a QWERTY keyboard, so the whole ladder can be driven without looking down: `Z` rejects, `X` clears to unrated, `C` picks. `A` and `S` sit on the row above them, within the same hand position.
+
+**Rotation neither alters the cull state nor moves the cursor.** `A` and `S` change only the selected photo's orientation; rating keys change only its ladder position; navigation keys change only the cursor. The three are independent.
 
 `P` and `U` are **no longer mapped to anything**. Pressing either does nothing at all — they are unmapped keys like any other, logged at debug level and otherwise ignored. They are not retained as aliases.
 
@@ -223,6 +247,10 @@ File-backed SQLite at `%LOCALAPPDATA%\FastCull\sessions\{session-guid}.db`, `jou
 
 In-memory SQLite was rejected: it does nothing for UI threading (that is what the background writer is for) and it loses a 45-minute session on any crash.
 
+**Schema migration.** The schema is versioned with `PRAGMA user_version`; revision **1** added `photos.rotation`. On open, any column the current revision requires but the database lacks is added with `ALTER TABLE`, then the version is recorded. This is not optional bookkeeping: `CREATE TABLE IF NOT EXISTS` is a no-op against a database that already exists, so a column added only to that statement never reaches the session databases already on disk, and the first write to it fails with `no such column`. The presence check reads `PRAGMA table_info` rather than trusting `user_version` alone, because a freshly created database already has the column while its version is still 0.
+
+**Independent fields.** A rating write and a rotation write for the same photo must not clobber one another. Queued writes carry only the fields they actually set, are merged when the writer collapses them by path, and are applied with `COALESCE` so an unset field keeps whatever the row already holds.
+
 ```sql
 CREATE TABLE photos (
   id             INTEGER PRIMARY KEY,
@@ -237,6 +265,7 @@ CREATE TABLE photos (
   file_bytes     INTEGER NOT NULL,
   flag           INTEGER NOT NULL DEFAULT 0,   -- 0 unflagged, 1 picked, 2 rejected
   stars          INTEGER NOT NULL DEFAULT 0,
+  rotation       INTEGER NOT NULL DEFAULT 0,   -- quarter turns clockwise, 0-3 (see 1.11)
   deleted        INTEGER NOT NULL DEFAULT 0,
   image_w        INTEGER,
   image_h        INTEGER,
@@ -295,8 +324,11 @@ These are the acceptance criteria. Each becomes an automated benchmark; a regres
 | Enter zoom, Tier A cached | < 50 ms |
 | Enter zoom, Tier B | < 400 ms CPU, < 100 ms GPU path |
 | Rating keypress to border change | < 16 ms |
+| Rotation keypress to photo turning | < 16 ms |
 | Pan at 1:1 | Sustained 60 fps minimum |
 | Peak working set, 2,000 files | < 4 GB system RAM |
+
+Rotation is held to the same bar as a rating keypress for the same reason: both are transforms of state already in memory, neither touches the decode pipeline. A rotation that needed a re-decode would fail this budget by an order of magnitude, which is why §1.11 forbids it.
 
 Benchmarks run against three fixture sets: all-RAW, all-JPEG, and mixed. The mixed set is the one that finds bugs.
 
@@ -442,6 +474,7 @@ Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate comm
 **v0.1 Walking skeleton.** Scan a folder, detect formats, group companions, resolve sort times, stream results into a filmstrip, display thumbnails and display-tier images, rate with `1`-`5` / `P` / `X`, persist to SQLite. No zoom, no HUD, no batch export. Ships with the perf harness and the first three budgets from 3.5 enforced.
 *This phase proves the decode and prefetch pipeline, which is where every real risk lives. If the filmstrip is not snappy here, nothing later matters.*
 *Scope note: implement JPEG and PNG first via WIC, then add the RAW path. WIC needs no external dependency, so slice 1 has no package risk.*
+*Added scope: photo rotation (§1.11) was not part of v0.1 as originally written and has been added to it. This does not change the phase gate — v0.1 still requires the first three §3.5 budgets enforced, and the cache-hit budget has no cache to measure until §3.3 exists.*
 
 **v0.2 Inspection.** 1:1 zoom with Tier A and Tier B paths, CPU debayer, dimension guard, metadata HUD, undo, Recycle Bin delete.
 
@@ -464,6 +497,8 @@ Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate comm
 | PNG and TIFF have no embedded thumbnail | Scan of a large PNG folder becomes a full decode storm | Generate once, cache as blob, downscaled decode only |
 | Huge TIFF or stitched panorama | Out-of-memory crash | Dimension guard in 3.3, hard 512 MB decoded ceiling |
 | `ItemsRepeater` horizontal virtualization with variable-width items | Filmstrip stutter, the one thing the app cannot afford | Fixed height, aspect-derived width, measured in v0.1 with 2,000 fixtures |
+| **EXIF orientation is applied for JPEG but not for RAW** | A portrait JPEG displays upright while a portrait RAW displays sideways. In Paired mode (§1.4) the same frame displays differently depending on which file is the display source | Measured 2026-08-23: `ThumbnailService` passes `RespectExifOrientation`, so WIC orients the file it is handed. The RAW path hands it an *embedded preview*, and those previews carry no orientation tag of their own (verified across `.ARW` and `.CR2`), while the RAW container's tag is never read. Unproven either way: whether a camera stores a portrait RAW's preview already rotated — the sample corpus is entirely landscape, orientation 1 |
+| Fixing RAW orientation later invalidates rotations already stored against the old baseline | A photo the user manually straightened would become double-corrected | Bounded set: only RAW files whose EXIF orientation is not 1 **and** which the user has already rotated by hand. Empty today. If it needs closing, store the decode-time baseline beside the delta (one extra column) — far cheaper before a few thousand photos are rotated than after |
 | NumLock ambiguity on numpad rating keys | Ratings silently do nothing | Explicit test case in v0.1 |
 | Unbounded decode jobs on fast scrubbing | Thread pool starvation | Cancellation tokens, coalesced navigation, bounded worker pool |
 | Scope creep past v0.3 | Never ships | Phase gates above |
