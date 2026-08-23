@@ -204,7 +204,33 @@ namespace Fastcull.ViewModels
 
             while (StageItems.Count > window.SlotCount)
                 StageItems.RemoveAt(StageItems.Count - 1);
+
+            PinStageItems();
         }
+
+        /// <summary>
+        /// Marks exactly the on-stage photos as pinned, and makes sure they are loading.
+        ///
+        /// Pinning is what stops eviction picking a photo the user is currently looking at -
+        /// dropping one of those would blank it on screen, which is a visible bug rather than a
+        /// memory saving (PRD 3.3).
+        /// </summary>
+        private void PinStageItems()
+        {
+            foreach (var item in _pinnedItems)
+                if (!StageItems.Contains(item)) item.IsPinned = false;
+
+            _pinnedItems.Clear();
+
+            foreach (var item in StageItems)
+            {
+                item.IsPinned = true;
+                item.BeginLoad();
+                _pinnedItems.Add(item);
+            }
+        }
+
+        private readonly List<FilmstripItemViewModel> _pinnedItems = new();
 
         public void MovePrevious() => SetActiveIndex(ActiveIndex - 1);
         public void MoveNext() => SetActiveIndex(ActiveIndex + 1);

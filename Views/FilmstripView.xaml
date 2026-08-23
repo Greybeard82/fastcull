@@ -198,8 +198,13 @@
                           PointerMoved="BottomScroll_PointerMoved"
                           PointerReleased="BottomScroll_PointerReleased"
                           PointerCaptureLost="BottomScroll_PointerReleased">
+                <!-- Thumbnails decode when the repeater realizes a container and cancel when it
+                     recycles one, so a 2,000-photo folder only ever decodes the dozen or so
+                     actually on screen rather than all of them at startup. -->
                 <ItemsRepeater x:Name="ThumbRepeater" ItemsSource="{x:Bind ViewModel.Items}" IsTabStop="False"
-                               Margin="40,0" VerticalAlignment="Bottom">
+                               Margin="40,0" VerticalAlignment="Bottom"
+                               ElementPrepared="ThumbRepeater_ElementPrepared"
+                               ElementClearing="ThumbRepeater_ElementClearing">
                     <ItemsRepeater.Layout>
                         <StackLayout Orientation="Horizontal" Spacing="8"/>
                     </ItemsRepeater.Layout>

@@ -14,22 +14,158 @@ using Windows.UI;
 
 namespace Fastcull.ViewModels
 {
-    public partial class FilmstripItemViewModel : ObservableObject, IDisposable
+    public partial class FilmstripItemViewModel : ObservableObject, ICacheableItem, IDisposable
     {
         private readonly DispatcherQueue _dispatcherQueue;
-        private readonly CancellationTokenSource _loadCts = new();
 
+        // Two independent load axes: the display tier follows the prefetch window, the thumbnail
+        // follows the filmstrip's own virtualization. They cancel independently.
+        private CancellationTokenSource? _displayCts;
+        private CancellationTokenSource? _thumbnailCts;
+        private bool _displayStarted;
+        private bool _thumbnailStarted;
+
+        /// <summary>
+        /// Constructing an item decodes NOTHING. It used to start both a thumbnail and a
+        /// display-tier decode here, and MainViewModel constructs one of these per scanned file -
+        /// so opening a 2,000-photo folder launched 4,000 decodes at once, which is how the
+        /// measured peak working set reached 5.25 GB against a 4 GB budget.
+        ///
+        /// Decoding is now driven by the cursor: PrefetchCoordinator calls BeginLoad on the photos
+        /// inside the sliding window and CancelLoad on the ones that leave it (PRD 3.3).
+        /// </summary>
         public FilmstripItemViewModel(ScannedPhoto photo, int index)
         {
             Photo = photo;
             Index = index;
             _dispatcherQueue = DispatcherQueue.GetForCurrentThread();
+        }
 
-            if (photo.Family is FormatFamily.Jpeg or FormatFamily.Png or FormatFamily.Raw)
+        /// <summary>Formats this app can decode at all; anything else never loads.</summary>
+        private bool IsDecodable =>
+            Photo.Family is FormatFamily.Jpeg or FormatFamily.Png or FormatFamily.Raw;
+
+        // ------------------------------------------------------------------
+        // ICacheableItem
+        // ------------------------------------------------------------------
+
+        /// <summary>True once either tier holds decoded pixels eviction could reclaim.</summary>
+        public bool IsResident => Thumbnail is not null || DisplayImage is not null || ZoomImage is not null;
+
+        /// <summary>
+        /// Rough memory held, for the eviction ceiling. Thumbnail and display tier are estimated
+        /// from their known long edges at BGRA8; the zoom tier is measured, because it is by far
+        /// the largest single allocation in the app (~31 MB at a fullscreen 2176px long edge) and
+        /// guessing it would make the ceiling meaningless whenever zoom is open.
+        /// </summary>
+        public long ResidentBytes
+        {
+            get
             {
-                _ = LoadThumbnailAsync(_loadCts.Token);
-                _ = LoadDisplayImageAsync(_loadCts.Token);
+                long bytes = 0;
+                if (Thumbnail is not null) bytes += EstimateBytes(ThumbnailService.ThumbnailLongEdge, EffectiveAspectRatio);
+                if (DisplayImage is not null) bytes += EstimateBytes(ThumbnailService.DisplayLongEdge, EffectiveAspectRatio);
+                bytes += _zoomImageBytes;
+                return bytes;
             }
+        }
+
+        private static long EstimateBytes(uint longEdge, double aspectRatio)
+        {
+            var aspect = aspectRatio > 0 && !double.IsNaN(aspectRatio) && !double.IsInfinity(aspectRatio)
+                ? aspectRatio
+                : StageLayout.DefaultAspectRatio;
+
+            var shortEdge = aspect >= 1 ? longEdge / aspect : longEdge * aspect;
+            return (long)(longEdge * shortEdge * 4);   // BGRA8
+        }
+
+        /// <summary>
+        /// Set by MainViewModel for the photos currently on stage. A pinned item is never an
+        /// eviction candidate - dropping one blanks a photo the user is looking at.
+        /// </summary>
+        public bool IsPinned { get; set; }
+
+        /// <summary>
+        /// Starts the display-tier decode - the expensive one, ~2.4 MB per photo - if it is not
+        /// already loaded or loading. Driven by the prefetch window.
+        /// </summary>
+        public void BeginLoad()
+        {
+            if (!IsDecodable || _displayStarted) return;
+
+            _displayStarted = true;
+            _displayCts = new CancellationTokenSource();
+            _ = LoadDisplayImageAsync(_displayCts.Token);
+        }
+
+        /// <summary>
+        /// Cancels an in-flight display load. Anything already decoded stays - cancelling is about
+        /// not spending work on a photo that left the window, not discarding work already done.
+        /// </summary>
+        public void CancelLoad()
+        {
+            if (_displayCts is null) return;
+
+            _displayCts.Cancel();
+            _displayCts.Dispose();
+            _displayCts = null;
+
+            // Only restartable if nothing landed; a completed load stays completed.
+            if (DisplayImage is null) _displayStarted = false;
+        }
+
+        /// <summary>
+        /// Starts the ~160px thumbnail. Driven by the bottom filmstrip realizing a container, NOT
+        /// by the prefetch window: the strip is a scrubbing surface that shows every photo in the
+        /// folder, so gating thumbnails behind the window would leave most of it blank. The
+        /// ItemsRepeater virtualizes, so only the handful actually on screen ever decode.
+        ///
+        /// A thumbnail is ~77 KB against the display tier's ~2.4 MB, so this axis is not what the
+        /// memory ceiling is about - but it still has no business decoding 2,000 of them at once.
+        /// </summary>
+        public void BeginThumbnailLoad()
+        {
+            if (!IsDecodable || _thumbnailStarted) return;
+
+            _thumbnailStarted = true;
+            _thumbnailCts = new CancellationTokenSource();
+            _ = LoadThumbnailAsync(_thumbnailCts.Token);
+        }
+
+        /// <summary>Cancels an in-flight thumbnail decode when its container is recycled.</summary>
+        public void CancelThumbnailLoad()
+        {
+            if (_thumbnailCts is null) return;
+
+            _thumbnailCts.Cancel();
+            _thumbnailCts.Dispose();
+            _thumbnailCts = null;
+
+            if (Thumbnail is null) _thumbnailStarted = false;
+        }
+
+        /// <summary>
+        /// Drops the decoded images so the GC can reclaim them, and allows a later reload.
+        ///
+        /// Nothing is Disposed here, deliberately: a SoftwareBitmap handed to
+        /// SoftwareBitmapSource.SetBitmapAsync is still being copied into a composition surface on
+        /// a XAML worker thread, and destroying it mid-copy fail-fasts the process with
+        /// 0xC000027B - the exact crash this project already fixed once. Releasing the last
+        /// managed reference is the safe equivalent.
+        /// </summary>
+        public void Evict()
+        {
+            if (IsPinned) return;
+
+            CancelLoad();
+            ReleaseZoomImage();
+
+            // The thumbnail is deliberately left alone: it is tiny, and the bottom filmstrip may
+            // still be showing it. Eviction is about the display tier.
+            DisplayImage = null;
+            DisplayImageFailed = false;
+            _displayStarted = false;
         }
 
         public ScannedPhoto Photo { get; }
@@ -265,6 +401,9 @@ namespace Fastcull.ViewModels
 
         private CancellationTokenSource? _zoomCts;
 
+        /// <summary>Measured size of the zoom decode, for the eviction ceiling. Zero when none is held.</summary>
+        private long _zoomImageBytes;
+
         /// <summary>
         /// Decodes this photo at <paramref name="longEdge"/> for zoom, then swaps it in.
         ///
@@ -312,6 +451,7 @@ namespace Fastcull.ViewModels
                 if (cts.IsCancellationRequested) return;
 
                 // Already on the UI thread, per the note above, so this is a direct assignment.
+                _zoomImageBytes = (long)bitmap.PixelWidth * bitmap.PixelHeight * 4;   // BGRA8
                 ZoomImage = source;
             }
             catch (OperationCanceledException)
@@ -373,6 +513,7 @@ namespace Fastcull.ViewModels
         {
             CancelZoomDecode();
             ZoomImage = null;
+            _zoomImageBytes = 0;
         }
 
         /// <summary>Stops an in-flight zoom decode without disturbing the image already shown.</summary>
@@ -397,8 +538,8 @@ namespace Fastcull.ViewModels
         /// in ThumbnailService, never mid-WinRT-call, so nothing native is ever left orphaned.</summary>
         public void Dispose()
         {
-            _loadCts.Cancel();
-            _loadCts.Dispose();
+            CancelLoad();
+            CancelThumbnailLoad();
             ReleaseZoomImage();
         }
 
@@ -413,14 +554,19 @@ namespace Fastcull.ViewModels
         /// </summary>
         private Task<SoftwareBitmap?> DecodeTierAsync(bool displayTier, CancellationToken cancellationToken)
         {
-            if (Photo.Family != FormatFamily.Raw)
+            // Through the gate: PRD 3.3 caps concurrent decodes at min(6, coreCount - 2). The
+            // sliding window decides which photos to decode; this decides how many run at once.
+            return DecodeGate.RunAsync(() =>
             {
-                return displayTier
-                    ? ThumbnailService.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken)
-                    : ThumbnailService.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
-            }
+                if (Photo.Family != FormatFamily.Raw)
+                {
+                    return displayTier
+                        ? ThumbnailService.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken)
+                        : ThumbnailService.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
+                }
 
-            return DecodeRawWithFallbackAsync(displayTier, cancellationToken);
+                return DecodeRawWithFallbackAsync(displayTier, cancellationToken);
+            }, cancellationToken);
         }
 
         private async Task<SoftwareBitmap?> DecodeRawWithFallbackAsync(bool displayTier, CancellationToken cancellationToken)

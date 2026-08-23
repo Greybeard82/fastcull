@@ -558,6 +558,24 @@ namespace Fastcull.Views
             ViewModel.SetActiveIndex(ViewModel.StageItems[slot].Index);
         }
 
+        /// <summary>
+        /// Starts a thumbnail decode as its container comes on screen, and cancels it when the
+        /// container is recycled. This is the filmstrip's own virtualization doing the gating -
+        /// the prefetch window governs the display tier, not this.
+        /// </summary>
+        private void ThumbRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
+        {
+            if (args.Index >= 0 && args.Index < ViewModel.Items.Count)
+                ViewModel.Items[args.Index].BeginThumbnailLoad();
+        }
+
+        private void ThumbRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
+        {
+            var index = sender.GetElementIndex(args.Element);
+            if (index >= 0 && index < ViewModel.Items.Count)
+                ViewModel.Items[index].CancelThumbnailLoad();
+        }
+
         private void Thumbnail_Tapped(object sender, TappedRoutedEventArgs e)
         {
             // ItemsRepeater does not propagate DataContext to realized elements when the

@@ -25,8 +25,10 @@ namespace Fastcull.Services
     /// </summary>
     public static class ThumbnailService
     {
-        internal const uint ThumbnailLongEdge = 160;
-        internal const uint DisplayLongEdge = 960;
+        // Public because the eviction ceiling in PRD 3.3 needs to estimate how much memory a
+        // resident item holds, and that estimate is derived from these tier sizes.
+        public const uint ThumbnailLongEdge = 160;
+        public const uint DisplayLongEdge = 960;
 
         /// <summary>
         /// Ceiling on a zoom-tier request. The zoom tier is sized to the viewport, and a viewport
@@ -35,7 +37,7 @@ namespace Fastcull.Services
         /// dimension guard exists for. Note the decode never upscales: asking for more than the
         /// file holds simply yields the file's own resolution.
         /// </summary>
-        internal const uint MaxZoomLongEdge = 8192;
+        public const uint MaxZoomLongEdge = 8192;
 
         public static Task<SoftwareBitmap?> DecodeThumbnailAsync(string filePath, CancellationToken cancellationToken = default)
             => DecodeScaledAsync(filePath, ThumbnailLongEdge, cancellationToken);
