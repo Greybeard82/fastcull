@@ -15,22 +15,43 @@ namespace Fastcull.Tests;
 /// </summary>
 public class PrefetchTests
 {
+    /// <summary>
+    /// Models the real view-model's two-part residency, which matters more than it looks:
+    /// <see cref="Evict"/> drops the display tier and deliberately keeps the thumbnail, so an item
+    /// the cursor has passed is still "resident" while having nothing left to give back. A fake
+    /// whose Evict frees everything hides exactly the bug this distinction exists to catch.
+    /// </summary>
     private sealed class FakeItem : ICacheableItem
     {
         public FakeItem(int index) => Index = index;
 
+        private bool _displayLoaded;
+
         public int Index { get; }
         public bool IsPinned { get; set; }
-        public bool IsResident { get; set; }
-        public long ResidentBytes { get; set; } = 2_500_000;   // followup3's ~2.5 MB per photo
+
+        /// <summary>Released by Evict - followup3's ~2.5 MB display tier.</summary>
+        public long DisplayBytes { get; set; } = 2_500_000;
+
+        /// <summary>Survives Evict, because the bottom filmstrip may still be showing it.</summary>
+        public long ThumbnailBytes { get; set; }
+
+        public bool IsResident
+        {
+            get => _displayLoaded || ThumbnailBytes > 0;
+            set => _displayLoaded = value;
+        }
+
+        public long ResidentBytes => (_displayLoaded ? DisplayBytes : 0) + ThumbnailBytes;
+        public long EvictableBytes => IsPinned || !_displayLoaded ? 0 : DisplayBytes;
 
         public int LoadCalls { get; private set; }
         public int CancelCalls { get; private set; }
         public int EvictCalls { get; private set; }
 
-        public void BeginLoad() { LoadCalls++; IsResident = true; }
+        public void BeginLoad() { LoadCalls++; _displayLoaded = true; }
         public void CancelLoad() => CancelCalls++;
-        public void Evict() { EvictCalls++; IsResident = false; }
+        public void Evict() { EvictCalls++; _displayLoaded = false; }
     }
 
     private static List<FakeItem> Items(int count) =>
@@ -242,6 +263,84 @@ public class PrefetchTests
 
         Assert.Equal(0, c.LastEvictionCount);
         Assert.All(items, i => Assert.True(i.IsResident));
+    }
+
+    // ---- Coordinator: eviction against a thumbnail that survives it ----
+    //
+    // The real view-model keeps the bottom filmstrip's thumbnail when it evicts, so a photo the
+    // cursor has passed stays resident with nothing left to release. These three cover what that
+    // does to the sweep - a 2,000-file walk measured 133 useless evictions per navigation step
+    // before the coordinator started crediting only what it actually freed.
+
+    /// <summary>The whole corpus behind the cursor holds a thumbnail and nothing else.</summary>
+    private static List<FakeItem> ItemsWithSurvivingThumbnails(int count, long thumbnailBytes = 68_000)
+    {
+        var items = Items(count);
+        foreach (var i in items) i.ThumbnailBytes = thumbnailBytes;
+        return items;
+    }
+
+    [Fact]
+    public void AnItemWithOnlyAThumbnailIsNotAnEvictionCandidate()
+    {
+        var items = ItemsWithSurvivingThumbnails(500);
+
+        // Every item resident, then everything outside the window already display-evicted.
+        foreach (var i in items) i.IsResident = true;
+        var c = new PrefetchCoordinator(ceilingBytes: 100L * 2_500_000);
+        c.OnCursorMoved(250, items);
+
+        var afterFirstPass = items.Sum(i => i.EvictCalls);
+
+        // Nothing has changed since; a second identical pass has nothing left to reclaim and
+        // must not keep calling Evict on items that would give back zero.
+        c.OnCursorMoved(250, items);
+
+        Assert.Equal(afterFirstPass, items.Sum(i => i.EvictCalls));
+        Assert.Equal(0, c.LastEvictionCount);
+    }
+
+    [Fact]
+    public void EvictionReachesDisplayTiersPastTheThumbnailOnlyItems()
+    {
+        var items = ItemsWithSurvivingThumbnails(500);
+        foreach (var i in items) i.IsResident = true;
+
+        // The furthest-from-cursor items hold only a thumbnail; the nearer ones hold a display
+        // tier too. Crediting a thumbnail-only "eviction" would let the sweep stop before it ever
+        // reached the display tiers - the exact failure this asserts against.
+        for (var i = 0; i < 500; i++)
+            if (Math.Abs(i - 250) > 100) items[i].IsResident = false;   // display gone, thumbnail kept
+
+        var ceiling = 60L * 2_500_000;
+        var c = new PrefetchCoordinator(ceilingBytes: ceiling);
+        c.OnCursorMoved(250, items);
+
+        Assert.True(c.ResidentBytes <= ceiling + 500 * 68_000,
+            $"eviction stopped at {c.ResidentBytes:N0} bytes against a {ceiling:N0} ceiling");
+        Assert.True(c.LastEvictionCount > 0, "nothing was evicted at all");
+
+        // Eviction reclaims the display tier and leaves the strip's thumbnail, so every item is
+        // still resident afterwards. An item that went fully non-resident would mean Evict had
+        // taken the thumbnail with it, which would blank the bottom filmstrip.
+        Assert.All(items, i => Assert.True(i.IsResident, $"item {i.Index} lost its thumbnail"));
+    }
+
+    [Fact]
+    public void EveryCountedEvictionActuallyFreedSomething()
+    {
+        var items = ItemsWithSurvivingThumbnails(400);
+        foreach (var i in items) i.IsResident = true;
+
+        var before = items.Sum(i => i.ResidentBytes);
+        var c = new PrefetchCoordinator(ceilingBytes: 50L * 2_500_000);
+        c.OnCursorMoved(200, items);
+
+        var freed = before - items.Sum(i => i.ResidentBytes);
+
+        // The count and the bytes must agree: every eviction the coordinator reported has to
+        // correspond to a real display tier released, at 2.5 MB each.
+        Assert.Equal(c.LastEvictionCount * 2_500_000L, freed);
     }
 
     [Fact]

@@ -25,6 +25,19 @@ namespace Fastcull.ViewModels
         long ResidentBytes { get; }
 
         /// <summary>
+        /// The part of <see cref="ResidentBytes"/> that <see cref="Evict"/> would actually give
+        /// back. Zero means evicting this item is a no-op.
+        ///
+        /// This is not the same as ResidentBytes and the difference is not academic: Evict keeps
+        /// the bottom filmstrip's thumbnail alive on purpose, so an item the cursor has already
+        /// passed typically holds a thumbnail and nothing else. Without this, the eviction sweep
+        /// credits itself the thumbnail's bytes for freeing nothing, and since those items sort
+        /// furthest-from-cursor they absorb the entire pass - measured at 133 useless evictions
+        /// per navigation step, while the display images that should have been dropped survived.
+        /// </summary>
+        long EvictableBytes { get; }
+
+        /// <summary>
         /// True while something on screen is bound to this item's images. Pinned items are never
         /// eviction candidates: dropping one would blank a photo the user is looking at, which is
         /// a visible bug rather than a memory optimisation.

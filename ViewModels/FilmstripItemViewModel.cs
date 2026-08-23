@@ -70,6 +70,23 @@ namespace Fastcull.ViewModels
             }
         }
 
+        /// <summary>
+        /// What <see cref="Evict"/> would actually release: the display and zoom tiers. The
+        /// thumbnail is excluded because eviction deliberately keeps it - the bottom filmstrip may
+        /// still be showing it - so counting it here would promise memory that never comes back.
+        /// </summary>
+        public long EvictableBytes
+        {
+            get
+            {
+                if (IsPinned) return 0;
+
+                long bytes = _zoomImageBytes;
+                if (DisplayImage is not null) bytes += EstimateBytes(ThumbnailService.DisplayLongEdge, EffectiveAspectRatio);
+                return bytes;
+            }
+        }
+
         private static long EstimateBytes(uint longEdge, double aspectRatio)
         {
             var aspect = aspectRatio > 0 && !double.IsNaN(aspectRatio) && !double.IsInfinity(aspectRatio)

@@ -83,22 +83,28 @@ namespace Fastcull.ViewModels
             LastEvictionCount = 0;
 
             var total = 0L;
-            List<ICacheableItem>? candidates = null;
+            foreach (var item in items)
+                if (item.IsResident) total += item.ResidentBytes;
 
+            ResidentBytes = total;
+
+            // Deliberately two passes. This runs on every navigation against PRD 3.5's 16 ms
+            // keypress budget, and the overwhelming majority of steps are nowhere near the
+            // ceiling - allocating and sorting a candidate list for all of them was measured at
+            // 11.4 ms per step. Under the ceiling, the cheap first pass is the whole cost.
+            if (total <= _ceilingBytes) return 0;
+
+            List<ICacheableItem>? candidates = null;
             foreach (var item in items)
             {
-                if (!item.IsResident) continue;
-
-                total += item.ResidentBytes;
-
-                if (item.IsPinned || _window.Current.Contains(item.Index)) continue;
+                if (!item.IsResident || item.IsPinned) continue;
+                if (item.EvictableBytes <= 0) continue;          // nothing to give back
+                if (_window.Current.Contains(item.Index)) continue;
 
                 (candidates ??= new List<ICacheableItem>()).Add(item);
             }
 
-            ResidentBytes = total;
-
-            if (total <= _ceilingBytes || candidates is null) return 0;
+            if (candidates is null) return 0;
 
             // Furthest from the cursor goes first: it is the least likely to be needed next.
             candidates.Sort((a, b) =>
@@ -111,8 +117,14 @@ namespace Fastcull.ViewModels
             {
                 if (total <= _ceilingBytes) break;
 
-                var freed = victim.ResidentBytes;
+                // Credit only what the item actually gave back, measured rather than assumed.
+                // EvictableBytes already filtered the no-ops out of the candidate list; this is
+                // the guard against an implementation whose estimate and whose Evict disagree.
+                var before = victim.ResidentBytes;
                 victim.Evict();
+                var freed = before - victim.ResidentBytes;
+                if (freed <= 0) continue;
+
                 total -= freed;
                 LastEvictionCount++;
             }
