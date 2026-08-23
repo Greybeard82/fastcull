@@ -30,6 +30,23 @@ namespace Fastcull
         {
             InitializeComponent();
             ApplyBlackTitleBar();
+            Closed += MainWindow_Closed;
+        }
+
+        /// <summary>
+        /// Work order H.2: a rating made 100 ms before close must not be lost. The session
+        /// store's writer drains and flushes whatever is still queued during DisposeAsync.
+        /// </summary>
+        private void MainWindow_Closed(object sender, WindowEventArgs args)
+        {
+            try
+            {
+                Filmstrip.ViewModel.ShutdownAsync().GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Shutdown flush failed: {ex}");
+            }
         }
 
         /// <summary>

@@ -40,6 +40,8 @@ namespace Fastcull.ViewModels
         [ObservableProperty]
         private FilmstripItemViewModel? _activeItem;
 
+        private SessionStore? _sessionStore;
+
         public async Task LoadAsync()
         {
             var root = FindDefaultSampleImagesRoot();
@@ -54,17 +56,44 @@ namespace Fastcull.ViewModels
             var sorted = scanned
                 .OrderBy(p => p.SortTime)
                 .ThenBy(p => p.CaptureSubsec)
-                .ThenBy(p => p.FilePath, StringComparer.OrdinalIgnoreCase);
+                .ThenBy(p => p.FilePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            // Persistence must never stop the app opening: a locked or corrupt session DB
+            // degrades to an in-memory session rather than an empty filmstrip.
+            Dictionary<string, CullState> stored = new(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                _sessionStore = await SessionStore.OpenAsync(root);
+                await _sessionStore.RegisterPhotosAsync(sorted);
+                stored = await _sessionStore.LoadRatingsAsync();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Session persistence unavailable: {ex}");
+                _sessionStore = null;
+            }
 
             Items.Clear();
             var index = 0;
             foreach (var photo in sorted)
             {
-                Items.Add(new FilmstripItemViewModel(photo, index));
+                var item = new FilmstripItemViewModel(photo, index);
+                if (stored.TryGetValue(photo.FilePath, out var state)) item.CullState = state;
+                Items.Add(item);
                 index++;
             }
 
             SetActiveIndex(Items.Count > 0 ? 0 : -1);
+        }
+
+        /// <summary>Flushes pending rating writes and closes the session database.</summary>
+        public async Task ShutdownAsync()
+        {
+            if (_sessionStore is null) return;
+            var store = _sessionStore;
+            _sessionStore = null;
+            await store.DisposeAsync();
         }
 
         /// <summary>Sole entry point for changing the active photo. Never touches scroll position - that is a View concern.</summary>
@@ -146,6 +175,11 @@ namespace Fastcull.ViewModels
             if (updated == item.CullState) return;
 
             item.CullState = updated;
+
+            // Fire-and-forget: QueueRating is a non-blocking TryWrite onto the background
+            // writer's channel, so the UI thread never awaits the database (PRD 3.1).
+            _sessionStore?.QueueRating(item.Photo.FilePath, updated);
+
             RatingChanged?.Invoke(item);
         }
 
