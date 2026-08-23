@@ -40,6 +40,24 @@ namespace Fastcull.Services
         public static Task<SoftwareBitmap?> DecodeDisplayImageAsync(string filePath, CancellationToken cancellationToken = default)
             => DecodePreviewAsync(filePath, ThumbnailService.DisplayLongEdge, cancellationToken);
 
+        /// <summary>
+        /// Zoom tier for RAW: the same candidate walk as the display tier, just asked for a
+        /// bigger size. Nothing new is needed to make this work - the selection below already
+        /// picks the smallest embedded JPEG that satisfies the requested edge, so a display-tier
+        /// request settles for the small ~1616px preview while a zoom-tier request reaches past
+        /// it to the full-sensor-width one the container also carries.
+        ///
+        /// Measured: an .ARW embeds a 7008x4672 JPEG and a .CR2 a 6000x4000 one, both inside the
+        /// 16 MB scan window, so a viewport-sized request is satisfied from data already in the
+        /// file with no debayer and no new decoder.
+        /// </summary>
+        public static Task<SoftwareBitmap?> DecodeZoomImageAsync(
+            string filePath, uint longEdge, CancellationToken cancellationToken = default)
+            => DecodePreviewAsync(
+                filePath,
+                Math.Clamp(longEdge, ThumbnailService.DisplayLongEdge, ThumbnailService.MaxZoomLongEdge),
+                cancellationToken);
+
         private static async Task<SoftwareBitmap?> DecodePreviewAsync(string filePath, uint longEdge, CancellationToken cancellationToken)
         {
             try

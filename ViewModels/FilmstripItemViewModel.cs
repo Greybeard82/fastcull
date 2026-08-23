@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -278,18 +278,31 @@ namespace Fastcull.ViewModels
         /// </summary>
         public async Task LoadZoomImageAsync(uint longEdge)
         {
-            if (Photo.Family is not (FormatFamily.Jpeg or FormatFamily.Png)) return;
+            if (Photo.Family is not (FormatFamily.Jpeg or FormatFamily.Png or FormatFamily.Raw)) return;
 
-            ReleaseZoomImage();
+            // Cancel any in-flight decode but KEEP whatever is already on screen. This method is
+            // re-entered for the same photo when the stage resizes (the fullscreen transition
+            // above all), and clearing here would drop the zoom image back to the display tier
+            // for the length of the new decode - a visible softening flash mid-zoom.
+            CancelZoomDecode();
 
             var cts = new CancellationTokenSource();
             _zoomCts = cts;
 
             try
             {
-                var bitmap = await ThumbnailService
-                    .DecodeZoomImageAsync(Photo.FilePath, longEdge, cts.Token)
-                    .ConfigureAwait(false);
+                // NO ConfigureAwait(false) here, deliberately. This method is started from the UI
+                // thread, so an uncaptured context resumes on the thread pool - and everything
+                // below touches SoftwareBitmapSource, which is a XAML type with UI-thread
+                // affinity. Constructing it off-thread threw a COMException that the catch below
+                // used to swallow, so the zoom image was never assigned and the stage silently
+                // kept rendering the ~960px display tier upscaled.
+                //
+                // The pixel decode still happens off the UI thread: ThumbnailService and
+                // RawPreviewDecoder each use ConfigureAwait(false) internally, so only the
+                // resumption after the decode comes back here. Same shape as
+                // LoadDisplayImageAsync, which has always been correct for this reason.
+                var bitmap = await DecodeZoomTierAsync(longEdge, cts.Token);
 
                 if (bitmap is null || cts.IsCancellationRequested) return;
 
@@ -298,10 +311,8 @@ namespace Fastcull.ViewModels
 
                 if (cts.IsCancellationRequested) return;
 
-                _dispatcherQueue.TryEnqueue(() =>
-                {
-                    try { if (!cts.IsCancellationRequested) ZoomImage = source; } catch { }
-                });
+                // Already on the UI thread, per the note above, so this is a direct assignment.
+                ZoomImage = source;
             }
             catch (OperationCanceledException)
             {
@@ -309,8 +320,44 @@ namespace Fastcull.ViewModels
             }
             catch (Exception ex)
             {
+                // Swallowing keeps a failed zoom from taking the app down mid-cull, but it must
+                // leave a trace. This exact catch previously logged only to Debug.WriteLine, and
+                // a COMException hid in it through three rounds of investigation while the stage
+                // quietly rendered an upscaled display-tier image.
+                App.LogToFile("ZoomTierFailed",
+                    $"{Photo.FileName} at longEdge={longEdge}, "
+                    + $"onUiThread={_dispatcherQueue.HasThreadAccess}{Environment.NewLine}{ex}");
+
                 System.Diagnostics.Debug.WriteLine($"[FastCull] Zoom decode failed: {ex}");
+
+                if (System.Diagnostics.Debugger.IsAttached) System.Diagnostics.Debugger.Break();
             }
+        }
+
+        /// <summary>
+        /// Picks the zoom decoder the same way DecodeTierAsync picks the display one: RAW through
+        /// RawPreviewDecoder's embedded-JPEG path, with WIC as the fallback, everything else
+        /// straight through WIC.
+        ///
+        /// RAW used to be excluded here on the premise that it had no decode pipeline. It has had
+        /// one since the embedded-preview work, and the containers carry a full-sensor-width JPEG
+        /// - so the exclusion was capping 96 of the 100 sample files at the ~960px display tier
+        /// for no reason.
+        /// </summary>
+        private async Task<SoftwareBitmap?> DecodeZoomTierAsync(uint longEdge, CancellationToken cancellationToken)
+        {
+            if (Photo.Family != FormatFamily.Raw)
+                return await ThumbnailService.DecodeZoomImageAsync(Photo.FilePath, longEdge, cancellationToken)
+                                             .ConfigureAwait(false);
+
+            var raw = await RawPreviewDecoder.DecodeZoomImageAsync(Photo.FilePath, longEdge, cancellationToken)
+                                             .ConfigureAwait(false);
+            if (raw is not null) return raw;
+
+            // Same last resort the display tier uses: WIC can decode RAW directly, but only when
+            // the Store Raw Image Extension happens to be installed.
+            return await ThumbnailService.DecodeZoomImageAsync(Photo.FilePath, longEdge, cancellationToken)
+                                         .ConfigureAwait(false);
         }
 
         /// <summary>
@@ -324,11 +371,16 @@ namespace Fastcull.ViewModels
         /// </summary>
         public void ReleaseZoomImage()
         {
+            CancelZoomDecode();
+            ZoomImage = null;
+        }
+
+        /// <summary>Stops an in-flight zoom decode without disturbing the image already shown.</summary>
+        private void CancelZoomDecode()
+        {
             _zoomCts?.Cancel();
             _zoomCts?.Dispose();
             _zoomCts = null;
-
-            ZoomImage = null;
         }
 
         /// <summary>

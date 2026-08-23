@@ -1,7 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
+using System.IO;
+using System.Threading.Tasks;
 using Fastcull.ViewModels;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
@@ -80,6 +82,9 @@ namespace Fastcull.Views
         /// <summary>The one item currently holding a zoom-tier decode, so it can be released.</summary>
         private FilmstripItemViewModel? _zoomLoadedItem;
 
+        /// <summary>The long edge that decode was requested at, so a resize can re-request.</summary>
+        private uint _zoomLoadedEdge;
+
         /// <summary>
         /// Navigation slide duration. Fast enough not to sit between the user and the next photo,
         /// slow enough to read as movement. Declared once in Themes/Nocturne.xaml so it is
@@ -116,7 +121,21 @@ namespace Fastcull.Views
         // Equal-height rule
         // ------------------------------------------------------------------
 
-        private void StageHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateStageLayout();
+        /// <summary>
+        /// Re-lays out the stage, then re-checks the zoom decode against the new geometry.
+        ///
+        /// The second half is what fixes the fullscreen race: FilmstripView is subscribed to
+        /// IsZoomed before MainWindow is, so the zoom decode was requested against the still-
+        /// windowed stage and the window only grew afterwards. Hanging the re-request off the
+        /// size change rather than off the zoom toggle fixes that transition and an ordinary
+        /// window resize mid-zoom with the same code - the trigger is "the photo's rendered size
+        /// changed", whatever caused it.
+        /// </summary>
+        private void StageHost_SizeChanged(object sender, SizeChangedEventArgs e)
+        {
+            UpdateStageLayout();
+            RefreshZoomImage();
+        }
 
         /// <summary>
         /// Runs on every navigation, whatever the source - keyboard, a stage click or a thumbnail
@@ -157,26 +176,59 @@ namespace Fastcull.Views
             {
                 _zoomLoadedItem?.ReleaseZoomImage();
                 _zoomLoadedItem = null;
+                _zoomLoadedEdge = 0;
                 return;
             }
 
             var item = ViewModel.ActiveItem;
-            if (item is null || ReferenceEquals(item, _zoomLoadedItem)) return;
+            if (item is null) return;
 
-            _zoomLoadedItem?.ReleaseZoomImage();
+            var longEdge = ComputeZoomLongEdge(item);
+            if (longEdge == 0) return;
+
+            // Re-request when the PHOTO changes or when the size it needs changes. Keying on the
+            // photo alone was the bug: entering zoom requests a decode sized to the still-windowed
+            // stage, the window then goes fullscreen, the element grows - and nothing asked again.
+            // Measured, that shipped a 1424px decode into a 2158px box, a 1.5x upscale.
+            if (ReferenceEquals(item, _zoomLoadedItem) && longEdge == _zoomLoadedEdge) return;
+
+            // Only clear when moving to a different photo. A same-photo re-request keeps the
+            // current image visible until the sharper one lands.
+            if (!ReferenceEquals(item, _zoomLoadedItem)) _zoomLoadedItem?.ReleaseZoomImage();
+
             _zoomLoadedItem = item;
-
-            var scale = XamlRoot?.RasterizationScale ?? 1.0;
-            if (scale <= 0) scale = 1.0;
-
-            var longEdgeDips = Math.Max(StageHost.ActualWidth, StageHost.ActualHeight);
-            if (longEdgeDips <= 0) return;
-
-            var longEdge = (uint)Math.Clamp(Math.Ceiling(longEdgeDips * scale), 1, 8192);
+            _zoomLoadedEdge = longEdge;
 
             // Fire-and-forget by design: the display-tier image is already on screen, so nothing
             // is waiting on this. It swaps itself in when it lands.
             _ = item.LoadZoomImageAsync(longEdge);
+        }
+
+        /// <summary>
+        /// The decode size the zoomed photo actually needs, in physical pixels.
+        ///
+        /// Measured from the PHOTO's own rendered box, not the viewport: an aspect-fit photo is
+        /// letterboxed inside the stage, so sizing to the viewport over-decodes by the whole
+        /// letterbox margin - on a 3440x1440 stage a 3:2 photo renders 2158 wide, and asking for
+        /// 3440 would decode 60% more pixels than are ever drawn.
+        ///
+        /// Quantised up to a 64px step so sub-pixel jitter during a resize cannot retrigger a
+        /// full decode for a handful of pixels.
+        /// </summary>
+        private uint ComputeZoomLongEdge(FilmstripItemViewModel item)
+        {
+            var dips = Math.Max(item.StageFrameWidth, item.StageFrameHeight);
+
+            // Before the first layout pass the frame has no size yet; the host is the best
+            // available stand-in, and the next size change corrects it.
+            if (dips <= 0) dips = Math.Max(StageHost.ActualWidth, StageHost.ActualHeight);
+            if (dips <= 0) return 0;
+
+            var scale = XamlRoot?.RasterizationScale ?? 1.0;
+            if (scale <= 0) scale = 1.0;
+
+            var pixels = Math.Ceiling(dips * scale / 64.0) * 64.0;
+            return (uint)Math.Clamp(pixels, 1, 8192);
         }
 
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)

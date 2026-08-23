@@ -55,7 +55,14 @@ namespace Fastcull
             InitializeComponent();
         }
 
-        private static void LogToFile(string source, string details)
+        /// <summary>
+        /// Internal so subsystems can report a failure they had to swallow. Swallowing an
+        /// exception to keep the app alive is sometimes right; leaving no trace of it is not -
+        /// a silently-caught COMException in the zoom path hid a real defect for three rounds
+        /// of investigation because Debug.WriteLine is invisible unless you happen to be
+        /// attached to a debugger at the time.
+        /// </summary>
+        internal static void LogToFile(string source, string details)
         {
             try
             {
