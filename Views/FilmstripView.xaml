@@ -12,76 +12,106 @@
     Loaded="FilmstripView_Loaded">
 
     <UserControl.Resources>
-        <conv:BoolToAccentBrushConverter x:Key="ActiveToBrushConverter"/>
-        <conv:ThumbnailFailedToVisibilityConverter x:Key="ThumbnailFailedToVisibilityConverter"/>
-        <conv:DisplayImageFailedToVisibilityConverter x:Key="DisplayImageFailedToVisibilityConverter"/>
+        <conv:ThumbnailFailedToVisibilityConverter x:Key="ThumbFailed"/>
+        <conv:DisplayImageFailedToVisibilityConverter x:Key="DisplayFailed"/>
+        <conv:ActiveSlotToBrushConverter x:Key="ActiveSlotToBrush"/>
+        <conv:BoolToActiveRingBrushConverter x:Key="BoolToActiveRing"/>
+        <conv:ItemToStarBadgeVisibilityConverter x:Key="StarBadgeVisible"/>
+        <conv:ItemToVisibilityConverter x:Key="ItemVisible"/>
     </UserControl.Resources>
 
-    <Grid RowDefinitions="*,Auto">
+    <Grid RowDefinitions="*,Auto" Background="#FF000000">
 
-        <!-- TOP REGION: exactly 3 slots - previous / active / next, always the true
-             neighbors of ActiveIndex in the sorted sequence. All three panes are equal
-             width/height; the active one is distinguished only by its border, never by size. -->
+        <!-- TOP REGION: three consecutive photos (PRD 1.5). The active one is the centre slot
+             except at the sequence ends, where the marker moves to an end slot rather than the
+             window scrolling past the boundary. Each slot is two concentric borders: the outer
+             is the blue active ring, the inner is the state colour, both the same thickness, so
+             state and active-ness can never be confused. -->
         <Grid Grid.Row="0" Margin="24" ColumnDefinitions="1*,1*,1*" ColumnSpacing="16">
 
-            <Border Grid.Column="0" Tapped="PreviousSlot_Tapped" Opacity="0.55"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="6">
-                <Grid>
-                    <Image Source="{x:Bind ViewModel.PreviousItem.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
-                    <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               Visibility="{x:Bind ViewModel.PreviousItem, Mode=OneWay, Converter={StaticResource DisplayImageFailedToVisibilityConverter}}"/>
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
-                        <TextBlock Text="{x:Bind ViewModel.PreviousItem.FileName, Mode=OneWay}"
-                                   HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Text="{x:Bind ViewModel.PreviousItem.FormatLabel, Mode=OneWay}"
-                                   FontSize="11" Opacity="0.7" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </Grid>
+            <!-- Slot 0 -->
+            <Border Grid.Column="0" Tag="0" Tapped="Slot_Tapped" Background="#FF000000"
+                    BorderThickness="3"
+                    BorderBrush="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource ActiveSlotToBrush}, ConverterParameter=0}">
+                <Border BorderThickness="3" BorderBrush="{x:Bind ViewModel.Slot0Item.StateBorderBrush, Mode=OneWay}">
+                    <Grid Visibility="{x:Bind ViewModel.Slot0Item, Mode=OneWay, Converter={StaticResource ItemVisible}}">
+                        <Image Source="{x:Bind ViewModel.Slot0Item.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
+                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="#FFE81123"
+                                   Visibility="{x:Bind ViewModel.Slot0Item, Mode=OneWay, Converter={StaticResource DisplayFailed}}"/>
+                        <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="2" Margin="10">
+                            <TextBlock Text="{x:Bind ViewModel.Slot0Item.FileName, Mode=OneWay}"
+                                       FontSize="12" Foreground="#FFE0E0E0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{x:Bind ViewModel.Slot0Item.FormatLabel, Mode=OneWay}"
+                                       FontSize="10" Foreground="#FF909090"/>
+                        </StackPanel>
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
+                                Background="#CC000000" CornerRadius="4" Padding="9,3"
+                                Visibility="{x:Bind ViewModel.Slot0Item, Mode=OneWay, Converter={StaticResource StarBadgeVisible}}">
+                            <TextBlock Text="{x:Bind ViewModel.Slot0Item.StarBadgeText, Mode=OneWay}"
+                                       FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
+                        </Border>
+                    </Grid>
+                </Border>
             </Border>
 
-            <Border Grid.Column="1"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
-                    BorderThickness="3" CornerRadius="6">
-                <Grid>
-                    <Image Source="{x:Bind ViewModel.ActiveItem.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
-                    <TextBlock Text="&#x26A0;" FontSize="36" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               Visibility="{x:Bind ViewModel.ActiveItem, Mode=OneWay, Converter={StaticResource DisplayImageFailedToVisibilityConverter}}"/>
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" Margin="16">
-                        <TextBlock Text="{x:Bind ViewModel.ActiveItem.FileName, Mode=OneWay}"
-                                   FontSize="18" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Text="{x:Bind ViewModel.ActiveItem.FormatLabel, Mode=OneWay}"
-                                   FontSize="13" Opacity="0.75" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </Grid>
+            <!-- Slot 1 -->
+            <Border Grid.Column="1" Tag="1" Tapped="Slot_Tapped" Background="#FF000000"
+                    BorderThickness="3"
+                    BorderBrush="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource ActiveSlotToBrush}, ConverterParameter=1}">
+                <Border BorderThickness="3" BorderBrush="{x:Bind ViewModel.Slot1Item.StateBorderBrush, Mode=OneWay}">
+                    <Grid Visibility="{x:Bind ViewModel.Slot1Item, Mode=OneWay, Converter={StaticResource ItemVisible}}">
+                        <Image Source="{x:Bind ViewModel.Slot1Item.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
+                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="#FFE81123"
+                                   Visibility="{x:Bind ViewModel.Slot1Item, Mode=OneWay, Converter={StaticResource DisplayFailed}}"/>
+                        <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="2" Margin="10">
+                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.FileName, Mode=OneWay}"
+                                       FontSize="12" Foreground="#FFE0E0E0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.FormatLabel, Mode=OneWay}"
+                                       FontSize="10" Foreground="#FF909090"/>
+                        </StackPanel>
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
+                                Background="#CC000000" CornerRadius="4" Padding="9,3"
+                                Visibility="{x:Bind ViewModel.Slot1Item, Mode=OneWay, Converter={StaticResource StarBadgeVisible}}">
+                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.StarBadgeText, Mode=OneWay}"
+                                       FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
+                        </Border>
+                    </Grid>
+                </Border>
             </Border>
 
-            <Border Grid.Column="2" Tapped="NextSlot_Tapped" Opacity="0.55"
-                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                    BorderThickness="1" CornerRadius="6">
-                <Grid>
-                    <Image Source="{x:Bind ViewModel.NextItem.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
-                    <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                               Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               Visibility="{x:Bind ViewModel.NextItem, Mode=OneWay, Converter={StaticResource DisplayImageFailedToVisibilityConverter}}"/>
-                    <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
-                        <TextBlock Text="{x:Bind ViewModel.NextItem.FileName, Mode=OneWay}"
-                                   HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
-                        <TextBlock Text="{x:Bind ViewModel.NextItem.FormatLabel, Mode=OneWay}"
-                                   FontSize="11" Opacity="0.7" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </Grid>
+            <!-- Slot 2 -->
+            <Border Grid.Column="2" Tag="2" Tapped="Slot_Tapped" Background="#FF000000"
+                    BorderThickness="3"
+                    BorderBrush="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource ActiveSlotToBrush}, ConverterParameter=2}">
+                <Border BorderThickness="3" BorderBrush="{x:Bind ViewModel.Slot2Item.StateBorderBrush, Mode=OneWay}">
+                    <Grid Visibility="{x:Bind ViewModel.Slot2Item, Mode=OneWay, Converter={StaticResource ItemVisible}}">
+                        <Image Source="{x:Bind ViewModel.Slot2Item.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
+                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="#FFE81123"
+                                   Visibility="{x:Bind ViewModel.Slot2Item, Mode=OneWay, Converter={StaticResource DisplayFailed}}"/>
+                        <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="2" Margin="10">
+                            <TextBlock Text="{x:Bind ViewModel.Slot2Item.FileName, Mode=OneWay}"
+                                       FontSize="12" Foreground="#FFE0E0E0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{x:Bind ViewModel.Slot2Item.FormatLabel, Mode=OneWay}"
+                                       FontSize="10" Foreground="#FF909090"/>
+                        </StackPanel>
+                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
+                                Background="#CC000000" CornerRadius="4" Padding="9,3"
+                                Visibility="{x:Bind ViewModel.Slot2Item, Mode=OneWay, Converter={StaticResource StarBadgeVisible}}">
+                            <TextBlock Text="{x:Bind ViewModel.Slot2Item.StarBadgeText, Mode=OneWay}"
+                                       FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
+                        </Border>
+                    </Grid>
+                </Border>
             </Border>
         </Grid>
 
         <!-- BOTTOM REGION: every scanned item, independently scrollable by wheel or drag.
-             Never moves the top selection on scroll; only a click here changes it. -->
-        <ScrollViewer x:Name="BottomScroll" Grid.Row="1" Height="120"
+             Mouse-only (PRD 2.4) - it never sees arrow keys. Scrolling here never moves the top
+             selection; only a click does. -->
+        <ScrollViewer x:Name="BottomScroll" Grid.Row="1" Height="120" Background="#FF000000"
                       HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Auto"
                       VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Hidden"
                       ZoomMode="Disabled"
@@ -91,29 +121,35 @@
                       PointerMoved="BottomScroll_PointerMoved"
                       PointerReleased="BottomScroll_PointerReleased"
                       PointerCaptureLost="BottomScroll_PointerReleased">
-            <ItemsRepeater x:Name="ThumbRepeater" ItemsSource="{x:Bind ViewModel.Items}" IsTabStop="False">
+            <ItemsRepeater x:Name="ThumbRepeater" ItemsSource="{x:Bind ViewModel.Items}" IsTabStop="False"
+                           Background="#FF000000">
                 <ItemsRepeater.Layout>
                     <StackLayout Orientation="Horizontal" Spacing="8"/>
                 </ItemsRepeater.Layout>
                 <ItemsRepeater.ItemTemplate>
                     <DataTemplate x:DataType="vm:FilmstripItemViewModel">
-                        <Border Width="140" Height="96" Tapped="Thumbnail_Tapped"
-                                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        <Border Width="140" Height="96" Tapped="Thumbnail_Tapped" Background="#FF000000"
                                 BorderThickness="2"
-                                BorderBrush="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource ActiveToBrushConverter}}"
-                                CornerRadius="4">
-                            <Grid>
-                                <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
-                                <TextBlock Text="&#x26A0;" FontSize="18" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                           Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                           Visibility="{x:Bind ThumbnailFailed, Mode=OneWay}"/>
-                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="3" Margin="8">
-                                    <TextBlock Text="{x:Bind FileName}" FontSize="11"
-                                               TextTrimming="CharacterEllipsis" HorizontalAlignment="Center"/>
-                                    <TextBlock Text="{x:Bind FormatLabel}" FontSize="9"
-                                               Opacity="0.65" HorizontalAlignment="Center"/>
-                                </StackPanel>
-                            </Grid>
+                                BorderBrush="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource BoolToActiveRing}}">
+                            <Border BorderThickness="2" BorderBrush="{x:Bind StateBorderBrush, Mode=OneWay}">
+                                <Grid>
+                                    <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                                    <TextBlock Text="&#x26A0;" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="#FFE81123"
+                                               Visibility="{x:Bind ThumbnailFailed, Mode=OneWay}"/>
+                                    <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="1" Margin="4">
+                                        <TextBlock Text="{x:Bind FileName}" FontSize="10" Foreground="#FFD0D0D0"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <TextBlock Text="{x:Bind FormatLabel}" FontSize="8" Foreground="#FF808080"/>
+                                    </StackPanel>
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="4"
+                                            Background="#CC000000" CornerRadius="3" Padding="6,1"
+                                            Visibility="{x:Bind IsStarBadgeVisible, Mode=OneWay}">
+                                        <TextBlock Text="{x:Bind StarBadgeText, Mode=OneWay}"
+                                                   FontSize="11" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
+                                    </Border>
+                                </Grid>
+                            </Border>
                         </Border>
                     </DataTemplate>
                 </ItemsRepeater.ItemTemplate>

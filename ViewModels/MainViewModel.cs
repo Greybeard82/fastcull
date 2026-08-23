@@ -6,6 +6,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Fastcull.Input;
+using Fastcull.Models;
 using Fastcull.Services;
 
 namespace Fastcull.ViewModels
@@ -24,13 +25,20 @@ namespace Fastcull.ViewModels
         private int _activeIndex = -1;
 
         [ObservableProperty]
-        private FilmstripItemViewModel? _previousItem;
+        private FilmstripItemViewModel? _slot0Item;
+
+        [ObservableProperty]
+        private FilmstripItemViewModel? _slot1Item;
+
+        [ObservableProperty]
+        private FilmstripItemViewModel? _slot2Item;
+
+        /// <summary>0, 1 or 2 - which of the three slots holds the active photo; -1 when empty.</summary>
+        [ObservableProperty]
+        private int _activeSlot = -1;
 
         [ObservableProperty]
         private FilmstripItemViewModel? _activeItem;
-
-        [ObservableProperty]
-        private FilmstripItemViewModel? _nextItem;
 
         public async Task LoadAsync()
         {
@@ -66,8 +74,7 @@ namespace Fastcull.ViewModels
             {
                 ActiveIndex = -1;
                 ActiveItem = null;
-                PreviousItem = null;
-                NextItem = null;
+                RecomputeSlots();
                 return;
             }
 
@@ -77,11 +84,27 @@ namespace Fastcull.ViewModels
             if (ActiveIndex >= 0 && ActiveIndex < Items.Count) Items[ActiveIndex].IsActive = false;
             ActiveIndex = index;
             Items[index].IsActive = true;
-
             ActiveItem = Items[index];
-            PreviousItem = index > 0 ? Items[index - 1] : null;
-            NextItem = index < Items.Count - 1 ? Items[index + 1] : null;
+
+            RecomputeSlots();
         }
+
+        /// <summary>
+        /// Recomputes all three slots from ActiveIndex - never carried forward incrementally, so
+        /// the window is guaranteed correct after any jump, not just a +/-1 step (PRD 1.5, E.3).
+        /// </summary>
+        private void RecomputeSlots()
+        {
+            var window = FilmstripWindow.Compute(ActiveIndex, Items.Count);
+            ActiveSlot = window.ActiveSlot;
+
+            Slot0Item = ItemAtOrNull(window.WindowStart + 0);
+            Slot1Item = ItemAtOrNull(window.WindowStart + 1);
+            Slot2Item = ItemAtOrNull(window.WindowStart + 2);
+        }
+
+        private FilmstripItemViewModel? ItemAtOrNull(int index)
+            => index >= 0 && index < Items.Count ? Items[index] : null;
 
         public void MovePrevious() => SetActiveIndex(ActiveIndex - 1);
         public void MoveNext() => SetActiveIndex(ActiveIndex + 1);
@@ -101,16 +124,33 @@ namespace Fastcull.ViewModels
                 case AppCommand.NavigateFirst: MoveFirst(); break;
                 case AppCommand.NavigateLast: MoveLast(); break;
 
-                // Rating commands are implemented in Task D, once CullState exists.
-                case AppCommand.LadderUp:
-                case AppCommand.LadderDown:
-                case AppCommand.SetStars:
-                case AppCommand.SetPicked:
-                case AppCommand.SetRejected:
-                case AppCommand.SetUnflagged:
-                    break;
+                case AppCommand.LadderUp: ApplyRating(s => s.Up()); break;
+                case AppCommand.LadderDown: ApplyRating(s => s.Down()); break;
+                case AppCommand.SetStars: ApplyRating(s => s.WithStars(input.Payload)); break;
+                case AppCommand.SetPicked: ApplyRating(s => s.AsPicked()); break;
+                case AppCommand.SetRejected: ApplyRating(s => s.AsRejected()); break;
+                case AppCommand.SetUnflagged: ApplyRating(s => s.AsUnflagged()); break;
             }
         }
+
+        /// <summary>
+        /// Applies a ladder transition to the active item only. Synchronous and awaits nothing,
+        /// so the border updates within one frame (PRD 1.6). Rating never moves the cursor.
+        /// </summary>
+        private void ApplyRating(Func<CullState, CullState> transition)
+        {
+            var item = ActiveItem;
+            if (item is null) return;
+
+            var updated = transition(item.CullState);
+            if (updated == item.CullState) return;
+
+            item.CullState = updated;
+            RatingChanged?.Invoke(item);
+        }
+
+        /// <summary>Raised after the active item's CullState changes, so persistence can observe it.</summary>
+        public event Action<FilmstripItemViewModel>? RatingChanged;
 
         private static string FindDefaultSampleImagesRoot()
         {

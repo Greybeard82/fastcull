@@ -42,15 +42,20 @@ namespace Fastcull.Views
         // PRD 2.2 and 2.4. Handling KeyDown here failed as soon as focus moved into the bottom
         // ScrollViewer, which consumed arrow keys before this control ever saw them.
 
-        private void PreviousSlot_Tapped(object sender, TappedRoutedEventArgs e)
+        /// <summary>Clicking any of the three top slots makes that photo active (PRD E.3).</summary>
+        private void Slot_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            var item = ViewModel.PreviousItem;
-            if (item is not null) ViewModel.SetActiveIndex(item.Index);
-        }
+            if (sender is not FrameworkElement { Tag: string tagText }) return;
+            if (!int.TryParse(tagText, out var slot)) return;
 
-        private void NextSlot_Tapped(object sender, TappedRoutedEventArgs e)
-        {
-            var item = ViewModel.NextItem;
+            var item = slot switch
+            {
+                0 => ViewModel.Slot0Item,
+                1 => ViewModel.Slot1Item,
+                2 => ViewModel.Slot2Item,
+                _ => null,
+            };
+
             if (item is not null) ViewModel.SetActiveIndex(item.Index);
         }
 

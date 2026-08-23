@@ -3,11 +3,14 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Fastcull.Models;
 using Fastcull.Services;
 using Microsoft.UI.Dispatching;
+using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Windows.Graphics.Imaging;
+using Windows.UI;
 
 namespace Fastcull.ViewModels
 {
@@ -39,6 +42,30 @@ namespace Fastcull.ViewModels
 
         [ObservableProperty]
         private bool _isActive;
+
+        /// <summary>Position on the PRD 1.6 cull ladder. Set only via MainViewModel.</summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(StateBorderBrush))]
+        [NotifyPropertyChangedFor(nameof(StarBadgeText))]
+        [NotifyPropertyChangedFor(nameof(IsStarBadgeVisible))]
+        private CullState _cullState = CullState.Default;
+
+        /// <summary>Red = rejected, yellow = unrated, green = picked (PRD 1.5).</summary>
+        public Brush StateBorderBrush => CullState.Flag switch
+        {
+            Flag.Rejected => RejectedBrush,
+            Flag.Picked => PickedBrush,
+            _ => UnratedBrush,
+        };
+
+        public string StarBadgeText => CullState.Stars >= 1 ? CullState.Stars.ToString() : string.Empty;
+
+        public Visibility IsStarBadgeVisible => CullState.Stars >= 1 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Windows-standard hues, shared by every item rather than allocated per item.
+        private static readonly SolidColorBrush RejectedBrush = new(Color.FromArgb(0xFF, 0xE8, 0x11, 0x23));
+        private static readonly SolidColorBrush UnratedBrush = new(Color.FromArgb(0xFF, 0xFF, 0xB9, 0x00));
+        private static readonly SolidColorBrush PickedBrush = new(Color.FromArgb(0xFF, 0x10, 0x89, 0x3E));
 
         /// <summary>Small (~160px) decode for the bottom scrubber strip.</summary>
         [ObservableProperty]
