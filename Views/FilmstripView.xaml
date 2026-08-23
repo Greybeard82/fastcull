@@ -15,23 +15,25 @@
     <UserControl.Resources>
         <conv:BoolToAccentBrushConverter x:Key="ActiveToBrushConverter"/>
         <conv:ThumbnailFailedToVisibilityConverter x:Key="ThumbnailFailedToVisibilityConverter"/>
+        <conv:DisplayImageFailedToVisibilityConverter x:Key="DisplayImageFailedToVisibilityConverter"/>
     </UserControl.Resources>
 
     <Grid RowDefinitions="*,Auto">
 
         <!-- TOP REGION: exactly 3 slots - previous / active / next, always the true
-             neighbors of ActiveIndex in the sorted sequence. -->
-        <Grid Grid.Row="0" Margin="24" ColumnDefinitions="1*,2*,1*" ColumnSpacing="16">
+             neighbors of ActiveIndex in the sorted sequence. All three panes are equal
+             width/height; the active one is distinguished only by its border, never by size. -->
+        <Grid Grid.Row="0" Margin="24" ColumnDefinitions="1*,1*,1*" ColumnSpacing="16">
 
             <Border Grid.Column="0" Tapped="PreviousSlot_Tapped" Opacity="0.55"
                     Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="6">
                 <Grid>
-                    <Image Source="{x:Bind ViewModel.PreviousItem.Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                    <Image Source="{x:Bind ViewModel.PreviousItem.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
                     <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               Visibility="{x:Bind ViewModel.PreviousItem, Mode=OneWay, Converter={StaticResource ThumbnailFailedToVisibilityConverter}}"/>
+                               Visibility="{x:Bind ViewModel.PreviousItem, Mode=OneWay, Converter={StaticResource DisplayImageFailedToVisibilityConverter}}"/>
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
                         <TextBlock Text="{x:Bind ViewModel.PreviousItem.FileName, Mode=OneWay}"
                                    HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
@@ -46,10 +48,10 @@
                     BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
                     BorderThickness="3" CornerRadius="6">
                 <Grid>
-                    <Image Source="{x:Bind ViewModel.ActiveItem.Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                    <Image Source="{x:Bind ViewModel.ActiveItem.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
                     <TextBlock Text="&#x26A0;" FontSize="36" HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               Visibility="{x:Bind ViewModel.ActiveItem, Mode=OneWay, Converter={StaticResource ThumbnailFailedToVisibilityConverter}}"/>
+                               Visibility="{x:Bind ViewModel.ActiveItem, Mode=OneWay, Converter={StaticResource DisplayImageFailedToVisibilityConverter}}"/>
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="6" Margin="16">
                         <TextBlock Text="{x:Bind ViewModel.ActiveItem.FileName, Mode=OneWay}"
                                    FontSize="18" HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
@@ -64,10 +66,10 @@
                     BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                     BorderThickness="1" CornerRadius="6">
                 <Grid>
-                    <Image Source="{x:Bind ViewModel.NextItem.Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
+                    <Image Source="{x:Bind ViewModel.NextItem.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
                     <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
                                Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                               Visibility="{x:Bind ViewModel.NextItem, Mode=OneWay, Converter={StaticResource ThumbnailFailedToVisibilityConverter}}"/>
+                               Visibility="{x:Bind ViewModel.NextItem, Mode=OneWay, Converter={StaticResource DisplayImageFailedToVisibilityConverter}}"/>
                     <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center" Spacing="4" Margin="12">
                         <TextBlock Text="{x:Bind ViewModel.NextItem.FileName, Mode=OneWay}"
                                    HorizontalAlignment="Center" TextTrimming="CharacterEllipsis"/>
