@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Pure logic, no WinUI. This exists so the parts of FastCull that cannot be exercised by hand
+    in the dev sandbox - keyboard resolution above all - can be unit-tested headlessly via
+    `dotnet test`. The WinUI project cannot be referenced from a test project because its MSIX
+    packaging targets refuse to build ProcessorArchitecture-neutral, so the testable types live
+    here instead and both Fastcull and Fastcull.Tests reference this.
+
+    The Windows TFM is required only for Windows.System.VirtualKey, which comes from the Windows
+    SDK projection rather than from WinUI - nothing here touches XAML.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <UseWinUI>false</UseWinUI>
+    <EnableMsixTooling>false</EnableMsixTooling>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MetadataExtractor" Version="2.9.3" />
+  </ItemGroup>
+
+</Project>

@@ -23,6 +23,20 @@
     <Content Include="Assets\Wide310x150Logo.scale-200.png" />
   </ItemGroup>
 
+  <!-- The sibling projects live under this project's directory, so the SDK's default globs
+       would otherwise pull their sources into this assembly. -->
+  <ItemGroup>
+    <Compile Remove="Fastcull.Tests\**;Fastcull.Core\**" />
+    <None Remove="Fastcull.Tests\**;Fastcull.Core\**" />
+    <Page Remove="Fastcull.Tests\**;Fastcull.Core\**" />
+    <PRIResource Remove="Fastcull.Tests\**;Fastcull.Core\**" />
+    <Content Remove="Fastcull.Tests\**;Fastcull.Core\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="Fastcull.Core\Fastcull.Core.csproj" />
+  </ItemGroup>
+
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
@@ -38,7 +52,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2526" />
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.4.0" />
-    <PackageReference Include="MetadataExtractor" Version="2.9.3" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
   </ItemGroup>
 
