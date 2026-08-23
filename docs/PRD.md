@@ -174,14 +174,18 @@ Consequences: the app forces dark theme regardless of the system setting, and us
 | `Down` | Move one step **down** the cull ladder (§1.6), clamped at Rejected |
 | `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
 | `0` / `NumPad0` | Clear stars, **keep the current flag** |
-| `P` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
-| `X` | Set `Rejected` — ladder index 0, clears stars |
-| `U` | Set `Unflagged` — ladder index 1, clears stars |
+| `C` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
+| `Z` | Set `Rejected` — ladder index 0, clears stars |
+| `X` | Set `Unrated` (`Unflagged`) — ladder index 1, clears stars |
 | `Home` / `End` | First / last photo |
 | `Space` | Enter zoom mode |
 | `I` | Toggle metadata HUD |
 | `Delete` | Move file group to Recycle Bin (undoable) |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+
+The three flag keys sit together under the left hand, next to each other on a QWERTY keyboard, so the whole ladder can be driven without looking down: `Z` rejects, `X` clears to unrated, `C` picks.
+
+`P` and `U` are **no longer mapped to anything**. Pressing either does nothing at all — they are unmapped keys like any other, logged at debug level and otherwise ignored. They are not retained as aliases.
 
 Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of every accelerator, and its key-repeat behaviour is inconsistent.
 
@@ -190,7 +194,7 @@ Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of e
 | :--- | :--- |
 | `Arrow keys` | Pan, with acceleration on hold |
 | `A` / `D`, `PgUp` / `PgDn` | Previous / next, preserving zoom and pan |
-| `1`-`5`, `NumPad1`-`NumPad5`, `P`, `X`, `U` | Rating keys stay live |
+| `1`-`5`, `NumPad1`-`NumPad5`, `Z`, `X`, `C` | Rating keys stay live |
 | `Space` or `Esc` | Exit to filmstrip |
 | `I` | Toggle HUD |
 
@@ -240,6 +244,10 @@ CREATE TABLE photos (
   meta_json      TEXT
 );
 CREATE TABLE companions (photo_id INTEGER, path TEXT, kind TEXT);
+-- Records the folder this session was scanned from, so a session DB can be matched back to
+-- its root on relaunch. This is what makes the resume lookup above possible; the
+-- offer-to-resume UI itself is still v0.4 (section 6), only the storage exists today.
+CREATE TABLE session_meta (root_path TEXT NOT NULL);
 CREATE INDEX idx_sort ON photos(sort_time, capture_subsec, path);
 ```
 
