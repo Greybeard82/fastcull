@@ -69,7 +69,7 @@ namespace Fastcull.ViewModels
             try
             {
                 var bitmap = await ThumbnailService.DecodeThumbnailAsync(Photo.FilePath, cancellationToken);
-                ApplyDecodeResult(bitmap, b => Thumbnail = b, () => ThumbnailFailed = true);
+                await ApplyDecodeResultAsync(bitmap, b => Thumbnail = b, () => ThumbnailFailed = true);
             }
             catch (OperationCanceledException)
             {
@@ -77,7 +77,7 @@ namespace Fastcull.ViewModels
             }
             catch (Exception)
             {
-                _dispatcherQueue.TryEnqueue(() => ThumbnailFailed = true);
+                _dispatcherQueue.TryEnqueue(() => { try { ThumbnailFailed = true; } catch { } });
             }
         }
 
@@ -86,7 +86,7 @@ namespace Fastcull.ViewModels
             try
             {
                 var bitmap = await ThumbnailService.DecodeDisplayImageAsync(Photo.FilePath, cancellationToken);
-                ApplyDecodeResult(bitmap, b => DisplayImage = b, () => DisplayImageFailed = true);
+                await ApplyDecodeResultAsync(bitmap, b => DisplayImage = b, () => DisplayImageFailed = true);
             }
             catch (OperationCanceledException)
             {
@@ -94,24 +94,43 @@ namespace Fastcull.ViewModels
             }
             catch (Exception)
             {
-                _dispatcherQueue.TryEnqueue(() => DisplayImageFailed = true);
+                _dispatcherQueue.TryEnqueue(() => { try { DisplayImageFailed = true; } catch { } });
             }
         }
 
-        private void ApplyDecodeResult(SoftwareBitmap? bitmap, Action<ImageSource> setImage, Action setFailed)
+        /// <summary>
+        /// Turns a decoded SoftwareBitmap into a bindable ImageSource and applies it.
+        /// SetBitmapAsync - itself a WinRT async call - is awaited here in the caller's already
+        /// background context, never inside a DispatcherQueue callback: the callback that follows
+        /// is a plain synchronous delegate with no async work in flight, so nothing can be
+        /// abandoned mid-await across that native callback boundary (same failure class as
+        /// documented at the top of ThumbnailService.cs, different call site).
+        /// </summary>
+        private async Task ApplyDecodeResultAsync(SoftwareBitmap? bitmap, Action<ImageSource> setImage, Action setFailed)
         {
             if (bitmap is null)
             {
-                _dispatcherQueue.TryEnqueue(() => setFailed());
+                _dispatcherQueue.TryEnqueue(() => { try { setFailed(); } catch { } });
                 return;
             }
 
-            var enqueued = _dispatcherQueue.TryEnqueue(async () =>
+            SoftwareBitmapSource source;
+            try
+            {
+                source = new SoftwareBitmapSource();
+                await source.SetBitmapAsync(bitmap);
+            }
+            catch (Exception)
+            {
+                bitmap.Dispose();
+                _dispatcherQueue.TryEnqueue(() => { try { setFailed(); } catch { } });
+                return;
+            }
+
+            var enqueued = _dispatcherQueue.TryEnqueue(() =>
             {
                 try
                 {
-                    var source = new SoftwareBitmapSource();
-                    await source.SetBitmapAsync(bitmap);
                     setImage(source);
                 }
                 catch (Exception)
