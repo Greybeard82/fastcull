@@ -70,9 +70,11 @@ namespace Fastcull.Benchmarks
                 Console.WriteLine();
                 Console.WriteLine($"Wrote {outPath}");
 
-                // Exit code reflects only rows that were measured AND failed. NOT MEASURABLE never
-                // fails the run - it is a gap in the app, not a regression in it.
-                var failures = results.Budgets.Count(b => b.Passed == false) + results.Memory.Count(m => !m.Passed);
+                // Exit code reflects only rows that were measured, gate the build, AND failed.
+                // NOT MEASURABLE never fails the run - it is a gap in the app, not a regression in
+                // it. Nor do REFERENCE rows, which measure an architecture that has been replaced
+                // and are kept for comparison (see MemoryResult.Informational).
+                var failures = results.Budgets.Count(b => b.Passed == false) + results.Memory.Count(m => m.FailsGate);
                 return failures == 0 ? 0 : 1;
             }
             catch (Exception ex)
@@ -94,7 +96,15 @@ namespace Fastcull.Benchmarks
             {
                 var status = m.StatusText.Replace("**", string.Empty);
                 var value = string.Create(CultureInfo.InvariantCulture, $"{m.MeasuredMb / 1024:F2} GB");
-                Console.WriteLine($"  [{status,-14}] {m.Metric,-62} {value,10}  (budget {m.Budget})");
+                Console.WriteLine($"  [{status,-25}] {m.Metric,-62} {value,10}  (budget {m.Budget})");
+            }
+
+            if (results.Memory.Any(m => m.Informational))
+            {
+                Console.WriteLine();
+                Console.WriteLine("  REFERENCE rows are measured and compared, but do not gate the build: they");
+                Console.WriteLine("  benchmark an architecture that has been replaced, kept so the before/after");
+                Console.WriteLine("  comparison comes from one run on one machine.");
             }
         }
 

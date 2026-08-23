@@ -23,8 +23,17 @@ namespace Fastcull.ViewModels
     /// </summary>
     public sealed class PrefetchCoordinator
     {
-        /// <summary>PRD 3.3's hard ceiling on resident decoded pixels.</summary>
-        public const long DefaultCeilingBytes = 3L * 1024 * 1024 * 1024;
+        /// <summary>
+        /// PRD 3.3's hard ceiling on resident decoded pixels.
+        ///
+        /// Lowered from 3 GB to 2 GB after the followup4 measurement: at 3 GB the cache filled
+        /// and stayed filled, putting peak working set at 3.26 GB against PRD 3.5's 4 GB budget -
+        /// passing, but with 16% headroom, and only because the ceiling happened to fit. The
+        /// window plus a nine-photo stage is roughly 17 items, so 2 GB is still two orders of
+        /// magnitude more than the cache needs to keep navigation on cached frames; the ceiling
+        /// governs how much it is allowed to hoard beyond that, not how much it needs.
+        /// </summary>
+        public const long DefaultCeilingBytes = 2L * 1024 * 1024 * 1024;
 
         private readonly PrefetchWindow _window = new();
         private readonly long _ceilingBytes;

@@ -24,7 +24,7 @@ namespace Fastcull.Benchmarks
     ///                       WIDER than the window's own -2 lookbehind.
     ///   Prefetch window     PrefetchCoordinator, verbatim. Same class the app calls.
     ///   Worker pool         DecodeGate, verbatim. Same semaphore the app decodes through.
-    ///   Eviction            PrefetchCoordinator's LRU at the 3 GB ceiling, verbatim.
+    ///   Eviction            PrefetchCoordinator's LRU at its configured ceiling, verbatim.
     ///   Thumbnail axis      The bottom filmstrip decodes on container realization, independent of
     ///                       the window, and never releases a thumbnail once decoded. Modelled as
     ///                       a band of realized containers following the cursor, retained for the

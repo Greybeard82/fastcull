@@ -258,11 +258,20 @@ public class PrefetchTests
         var items = Items(20);
         foreach (var i in items) i.IsResident = true;
 
-        var c = new PrefetchCoordinator();   // 3 GB against 20 x 2.5 MB
+        var c = new PrefetchCoordinator();   // the default ceiling against 20 x 2.5 MB
         c.OnCursorMoved(10, items);
 
         Assert.Equal(0, c.LastEvictionCount);
         Assert.All(items, i => Assert.True(i.IsResident));
+    }
+
+    [Fact]
+    public void TheCeilingIsTwoGigabytes()
+    {
+        // Pinned deliberately. PRD 3.3 states this number and PRD 3.5's 4 GB peak-working-set
+        // budget is measured against it - at 3 GB the measured peak was 3.26 GB, passing with
+        // 16% headroom. Changing it should be a decision, not a drive-by edit.
+        Assert.Equal(2L * 1024 * 1024 * 1024, PrefetchCoordinator.DefaultCeilingBytes);
     }
 
     // ---- Coordinator: eviction against a thumbnail that survives it ----

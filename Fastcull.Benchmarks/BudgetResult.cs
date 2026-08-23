@@ -73,8 +73,28 @@ namespace Fastcull.Benchmarks
         public required double BudgetMb { get; init; }
         public string? Detail { get; init; }
 
+        /// <summary>
+        /// A row kept as a permanent comparison point rather than as a gate. It is still measured,
+        /// still compared against its budget, and still printed - but it cannot fail the build.
+        ///
+        /// The case this exists for: the eager-fan-out peak-working-set row measures the
+        /// architecture PRD 3.3 replaced. Keeping it is what proves the improvement is
+        /// architectural rather than day-to-day variance, since both numbers come from the same
+        /// run on the same machine. But it measures code that no longer ships, so reporting it as
+        /// a build failure would mean the gate could never go green. Deleting it instead would
+        /// throw away the comparison, and silently excluding it would leave a reader wondering why
+        /// a failing row does not fail anything.
+        /// </summary>
+        public bool Informational { get; init; }
+
         public bool Passed => MeasuredMb <= BudgetMb;
-        public string StatusText => Passed ? "PASS" : "**FAIL**";
+
+        /// <summary>True only for a row that both gates the build and is over its budget.</summary>
+        public bool FailsGate => !Informational && !Passed;
+
+        public string StatusText => Informational
+            ? (Passed ? "REFERENCE (within budget)" : "REFERENCE (over budget)")
+            : Passed ? "PASS" : "**FAIL**";
     }
 
     internal sealed class HarnessResults

@@ -64,6 +64,18 @@ namespace Fastcull.Benchmarks
             }
             sb.AppendLine();
 
+            if (results.Memory.Any(m => m.Informational))
+            {
+                sb.AppendLine("**`REFERENCE` rows are measured and compared against their budget, but do not gate the");
+                sb.AppendLine("build.** They benchmark the eager-fan-out architecture PRD 3.3 replaced. They are kept —");
+                sb.AppendLine("rather than deleted, or silently excluded — because running them in the *same* run as the");
+                sb.AppendLine("shipping path is what proves the improvement is architectural rather than day-to-day");
+                sb.AppendLine("variance between two runs. A row measuring code that no longer ships must never be able");
+                sb.AppendLine("to fail the build on its own, so `REFERENCE (over budget)` is a fact about the old design,");
+                sb.AppendLine("not a regression in the current one.");
+                sb.AppendLine();
+            }
+
             sb.AppendLine("### Detail");
             sb.AppendLine();
             // Metric names may already carry emphasis for the table; strip it so the bullet's own
@@ -118,11 +130,11 @@ namespace Fastcull.Benchmarks
             sb.AppendLine("  in `FilmstripItemViewModel`, which lives in the WinUI project and cannot be");
             sb.AppendLine("  constructed headlessly; the compositor repaint after it is GPU-scheduled and not");
             sb.AppendLine("  the app's to time.");
-            sb.AppendLine("- **Two peak-working-set rows measure two different architectures, on purpose.** The");
-            sb.AppendLine("  \"bitmaps retained\" row reproduces the pre-PRD-3.3 code: every constructed item started");
-            sb.AppendLine("  both decodes immediately and nothing ever released one. The \"window + LRU eviction\"");
-            sb.AppendLine("  row reproduces what ships now. The first is kept deliberately — it is the number the");
-            sb.AppendLine("  second has to beat, and deleting it would hide the comparison.");
+            sb.AppendLine("- **The peak-working-set rows measure two different architectures, on purpose.** The");
+            sb.AppendLine("  `REFERENCE` rows reproduce the pre-PRD-3.3 code: every constructed item started both");
+            sb.AppendLine("  decodes immediately and nothing ever released one. The \"window + LRU eviction\" row");
+            sb.AppendLine("  reproduces what ships now and is the one that gates. The first is kept deliberately —");
+            sb.AppendLine("  it is the number the second has to beat, and deleting it would hide the comparison.");
             sb.AppendLine("- **The memory rows hold `SoftwareBitmap`, the app holds `SoftwareBitmapSource`.** A");
             sb.AppendLine("  `SoftwareBitmapSource` additionally copies pixels into a XAML composition surface,");
             sb.AppendLine("  which may live in GPU memory and is not this process's working set to sample. Read");

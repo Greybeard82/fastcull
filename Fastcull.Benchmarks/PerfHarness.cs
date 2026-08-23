@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using Fastcull.Input;
 using Fastcull.Models;
 using Fastcull.Services;
+using Fastcull.ViewModels;
 using Windows.Graphics.Imaging;
 using Windows.System;
 
@@ -445,12 +446,22 @@ namespace Fastcull.Benchmarks
             _results.Memory.Add(new MemoryResult
             {
                 Metric = retainDecodedBitmaps
-                    ? "Peak working set, 2,000 files — **bitmaps retained, as the app does**"
+                    ? "Peak working set, 2,000 files — **eager fan-out, the architecture PRD 3.3 replaced**"
                     : "Peak working set, 2,000 files (transient decode only, bitmaps disposed)",
                 Budget = "< 4 GB",
                 MeasuredMb = peakWorkingSet / 1024.0 / 1024,
                 BudgetMb = 4096,
-                Detail = detail,
+
+                // Both variants measure the pre-PRD-3.3 fan-out, which no longer ships. They are
+                // the control the shipping row is compared against, not a gate - see
+                // MemoryResult.Informational.
+                Informational = true,
+                Detail = detail
+                    + (retainDecodedBitmaps
+                        ? " **Reference row, does not gate the build**: this is the architecture PRD 3.3 replaced,"
+                          + " kept in the same run as the shipping path so the before/after comparison is like-for-like"
+                          + " on one machine rather than across two runs on different days."
+                        : " **Reference row, does not gate the build**: measures the old fan-out's transient cost."),
             });
 
             _results.Budgets.Add(new BudgetResult
@@ -514,7 +525,7 @@ namespace Fastcull.Benchmarks
                 BudgetMb = 4096,
                 Detail = string.Create(CultureInfo.InvariantCulture,
                     $"Cursor stepped through all {outcome.Steps:N0} photos, settling the prefetch at every step so every photo genuinely decodes. "
-                    + $"Nine stage slots (FilmstripWindow.MaxSlots - the worst case), +5/-2 window, DecodeGate at {DecodeGate.MaxConcurrency} workers, 3 GB LRU ceiling. "
+                    + $"Nine stage slots (FilmstripWindow.MaxSlots - the worst case), +5/-2 window, DecodeGate at {DecodeGate.MaxConcurrency} workers, {PrefetchCoordinator.DefaultCeilingBytes / 1024 / 1024 / 1024} GB LRU ceiling. "
                     + $"{outcome.TotalEvictions:N0} evictions over the run. Peak {outcome.PeakResidentItems:N0} items resident at once, {trackedMb:F0} MB of tracked decoded pixels. "
                     + $"Baseline working set {outcome.BaselineWorkingSetBytes / 1024.0 / 1024:F0} MB. Peak managed heap {outcome.PeakManagedBytes / 1024.0 / 1024:F0} MB. "
                     + $"Walk took {outcome.Elapsed.TotalSeconds:F1} s.")
