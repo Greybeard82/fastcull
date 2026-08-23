@@ -12,6 +12,7 @@ using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Fastcull.Input;
 using Microsoft.UI;
+using Microsoft.UI.Windowing;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
 using Windows.UI;
@@ -30,22 +31,50 @@ namespace Fastcull
         {
             InitializeComponent();
             ApplyBlackTitleBar();
-            Closed += MainWindow_Closed;
+            AppWindow.Closing += AppWindow_Closing;
         }
 
+        /// <summary>True once the shutdown flush has finished and the window may really close.</summary>
+        private bool _shutdownComplete;
+
         /// <summary>
-        /// Work order H.2: a rating made 100 ms before close must not be lost. The session
-        /// store's writer drains and flushes whatever is still queued during DisposeAsync.
+        /// Flushes pending rating writes before the window closes, so a rating made moments
+        /// before close is not lost (PRD 3.1).
+        ///
+        /// This deliberately uses the cancelable AppWindow.Closing rather than Window.Closed.
+        /// The previous version blocked the UI thread inside Closed via
+        /// ShutdownAsync().GetAwaiter().GetResult(), which deadlocked: the awaited continuation
+        /// needed the UI thread to resume on, and the UI thread was busy waiting for that same
+        /// continuation. Confirmed from a hang dump - the STA thread sat in
+        /// ManualResetEventSlim.Wait inside MainWindow_Closed while dumpasync showed
+        /// ShutdownAsync suspended on a SetOnInvokeMres. The window then never closed and the
+        /// process had to be killed from Task Manager.
+        ///
+        /// Cancelling the first close keeps the dispatcher pumping normally, which is the state
+        /// async code is supposed to run in, then closes again for real once the flush is done.
         /// </summary>
-        private void MainWindow_Closed(object sender, WindowEventArgs args)
+        private async void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
         {
+            if (_shutdownComplete) return;   // second pass: let the close proceed
+
+            args.Cancel = true;
+
             try
             {
-                Filmstrip.ViewModel.ShutdownAsync().GetAwaiter().GetResult();
+                // No ConfigureAwait(false) here on purpose - Close() below must run on the UI
+                // thread, so this continuation should come back to it.
+                await Filmstrip.ViewModel.ShutdownAsync();
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"[FastCull] Shutdown flush failed: {ex}");
+            }
+            finally
+            {
+                // Set even if the flush threw: a failed flush must not trap the user in a window
+                // that refuses to close.
+                _shutdownComplete = true;
+                Close();
             }
         }
 

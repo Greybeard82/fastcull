@@ -93,7 +93,11 @@ namespace Fastcull.ViewModels
             if (_sessionStore is null) return;
             var store = _sessionStore;
             _sessionStore = null;
-            await store.DisposeAsync();
+
+            // ConfigureAwait(false): this must never require the UI thread to resume. Without
+            // it, a caller that blocks the UI thread waiting on this method deadlocks - the
+            // continuation needs the very thread the caller is holding.
+            await store.DisposeAsync().ConfigureAwait(false);
         }
 
         /// <summary>Sole entry point for changing the active photo. Never touches scroll position - that is a View concern.</summary>
