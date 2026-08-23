@@ -1,0 +1,208 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Fastcull.Views.SidebarView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    FontFamily="{StaticResource UiFontFamily}">
+
+    <!-- PRD 1.10 is absolute: every non-photograph pixel is exactly #FF000000. The panel is
+         separated from the stage by a single hairline rule, not by a lighter fill. -->
+
+    <UserControl.Resources>
+        <Style x:Key="SectionLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="CharacterSpacing" Value="140"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral700Brush}"/>
+            <Setter Property="Margin" Value="0,0,0,8"/>
+        </Style>
+
+        <Style x:Key="TallyLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="CharacterSpacing" Value="50"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral500Brush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- Right-aligned rather than tabular-figured: WinUI's TextBlock has no FontFeatures, so
+             pinning the right edge is what stops a count reflowing its row on every keypress. -->
+        <Style x:Key="TallyValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral200Brush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="HorizontalTextAlignment" Value="Right"/>
+        </Style>
+
+        <Style x:Key="StarValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral500Brush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="HorizontalTextAlignment" Value="Right"/>
+        </Style>
+    </UserControl.Resources>
+
+    <Grid Background="#FF000000">
+        <!-- Hairline on the trailing edge, the only thing dividing panel from stage. -->
+        <Border BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="0,0,1,0">
+            <Grid Margin="16,14,16,16" RowDefinitions="Auto,Auto,Auto,*,Auto">
+
+                <!-- ================= Folder + pin ================= -->
+                <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                    <StackPanel Grid.Column="0" Spacing="3">
+                        <TextBlock Text="{x:Bind ViewModel.FolderName, Mode=OneWay}"
+                                   FontSize="13" CharacterSpacing="40"
+                                   Foreground="{StaticResource Accent200Brush}"
+                                   TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                        <TextBlock Text="{x:Bind ViewModel.FolderPath, Mode=OneWay}"
+                                   FontSize="9" CharacterSpacing="20"
+                                   Foreground="{StaticResource Neutral700Brush}"
+                                   TextTrimming="CharacterEllipsis" MaxLines="1"
+                                   ToolTipService.ToolTip="{x:Bind ViewModel.FolderPath, Mode=OneWay}"/>
+                    </StackPanel>
+
+                    <!-- IsTabStop=False: keyboard focus belongs to the cull, never to chrome.
+                         RootGrid's PreviewKeyDown already claims every mapped key before a focused
+                         child sees it, so this is belt-and-braces rather than the only guard. -->
+                    <Button Grid.Column="1" x:Name="PinButton" Click="PinButton_Click"
+                            IsTabStop="False"
+                            Width="26" Height="26" Padding="0" Margin="8,0,0,0"
+                            VerticalAlignment="Top"
+                            Background="Transparent" BorderThickness="0"
+                            ToolTipService.ToolTip="{x:Bind ViewModel.PinTooltip, Mode=OneWay}">
+                        <TextBlock Text="{x:Bind ViewModel.PinGlyph, Mode=OneWay}"
+                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                   FontSize="13"
+                                   Foreground="{x:Bind ViewModel.PinBrush, Mode=OneWay}"/>
+                    </Button>
+                </Grid>
+
+                <!-- ================= Counts ================= -->
+                <StackPanel Grid.Row="1" Margin="0,22,0,0">
+                    <TextBlock Text="SESSION" Style="{StaticResource SectionLabel}"/>
+
+                    <Grid ColumnDefinitions="*,Auto" Margin="0,0,0,7">
+                        <TextBlock Grid.Column="0" Text="Total" Style="{StaticResource TallyLabel}"/>
+                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.TotalText, Mode=OneWay}"
+                                   Style="{StaticResource TallyValue}"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,7">
+                        <Rectangle Grid.Column="0" Width="3" Height="13" RadiusX="1.5" RadiusY="1.5"
+                                   Fill="{StaticResource PickBrush}" Margin="0,0,9,0"/>
+                        <TextBlock Grid.Column="1" Text="Picked" Style="{StaticResource TallyLabel}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.PickedText, Mode=OneWay}"
+                                   Style="{StaticResource TallyValue}"
+                                   Foreground="{StaticResource PickBrush}"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,7">
+                        <Rectangle Grid.Column="0" Width="3" Height="13" RadiusX="1.5" RadiusY="1.5"
+                                   Fill="{StaticResource RejectBrush}" Margin="0,0,9,0"/>
+                        <TextBlock Grid.Column="1" Text="Rejected" Style="{StaticResource TallyLabel}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.RejectedText, Mode=OneWay}"
+                                   Style="{StaticResource TallyValue}"
+                                   Foreground="{StaticResource RejectBrush}"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <Rectangle Grid.Column="0" Width="3" Height="13" RadiusX="1.5" RadiusY="1.5"
+                                   Fill="{StaticResource Neutral800Brush}" Margin="0,0,9,0"/>
+                        <TextBlock Grid.Column="1" Text="Remaining" Style="{StaticResource TallyLabel}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.UnflaggedText, Mode=OneWay}"
+                                   Style="{StaticResource TallyValue}"/>
+                    </Grid>
+
+                    <TextBlock Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}"
+                               FontSize="9" CharacterSpacing="60" Margin="0,12,0,0"
+                               Foreground="{StaticResource Neutral700Brush}"/>
+                </StackPanel>
+
+                <!-- ================= Star histogram ================= -->
+                <StackPanel Grid.Row="2" Margin="0,26,0,0">
+                    <TextBlock Text="STARS" Style="{StaticResource SectionLabel}"/>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
+                        <TextBlock Grid.Column="0" Text="★" FontSize="9"
+                                   Foreground="{StaticResource Accent400Brush}"
+                                   VerticalAlignment="Center" Width="46"/>
+                        <Rectangle Grid.Column="1" Height="4" RadiusX="2" RadiusY="2"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center"
+                                   Fill="{StaticResource Accent400Brush}"
+                                   Width="{x:Bind ViewModel.Star1BarWidth, Mode=OneWay}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Star1Text, Mode=OneWay}"
+                                   Style="{StaticResource StarValue}" Width="28"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
+                        <TextBlock Grid.Column="0" Text="★★" FontSize="9"
+                                   Foreground="{StaticResource Accent400Brush}"
+                                   VerticalAlignment="Center" Width="46"/>
+                        <Rectangle Grid.Column="1" Height="4" RadiusX="2" RadiusY="2"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center"
+                                   Fill="{StaticResource Accent400Brush}"
+                                   Width="{x:Bind ViewModel.Star2BarWidth, Mode=OneWay}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Star2Text, Mode=OneWay}"
+                                   Style="{StaticResource StarValue}" Width="28"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
+                        <TextBlock Grid.Column="0" Text="★★★" FontSize="9"
+                                   Foreground="{StaticResource Accent400Brush}"
+                                   VerticalAlignment="Center" Width="46"/>
+                        <Rectangle Grid.Column="1" Height="4" RadiusX="2" RadiusY="2"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center"
+                                   Fill="{StaticResource Accent400Brush}"
+                                   Width="{x:Bind ViewModel.Star3BarWidth, Mode=OneWay}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Star3Text, Mode=OneWay}"
+                                   Style="{StaticResource StarValue}" Width="28"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
+                        <TextBlock Grid.Column="0" Text="★★★★" FontSize="9"
+                                   Foreground="{StaticResource Accent400Brush}"
+                                   VerticalAlignment="Center" Width="46"/>
+                        <Rectangle Grid.Column="1" Height="4" RadiusX="2" RadiusY="2"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center"
+                                   Fill="{StaticResource Accent400Brush}"
+                                   Width="{x:Bind ViewModel.Star4BarWidth, Mode=OneWay}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Star4Text, Mode=OneWay}"
+                                   Style="{StaticResource StarValue}" Width="28"/>
+                    </Grid>
+
+                    <Grid ColumnDefinitions="Auto,*,Auto">
+                        <TextBlock Grid.Column="0" Text="★★★★★" FontSize="9"
+                                   Foreground="{StaticResource Accent400Brush}"
+                                   VerticalAlignment="Center" Width="46"/>
+                        <Rectangle Grid.Column="1" Height="4" RadiusX="2" RadiusY="2"
+                                   HorizontalAlignment="Left" VerticalAlignment="Center"
+                                   Fill="{StaticResource Accent400Brush}"
+                                   Width="{x:Bind ViewModel.Star5BarWidth, Mode=OneWay}"/>
+                        <TextBlock Grid.Column="2" Text="{x:Bind ViewModel.Star5Text, Mode=OneWay}"
+                                   Style="{StaticResource StarValue}" Width="28"/>
+                    </Grid>
+                </StackPanel>
+
+                <!-- ================= Finish Session placeholder =================
+                     Disabled on purpose. PRD 4.1's modal and the entire batch copy/move path do
+                     not exist in the codebase; a button that looked live would be a lie.
+
+                     The tooltip sits on the wrapping Grid, not on the Button: a disabled control
+                     receives no pointer input in WinUI, so a tooltip set on the Button itself
+                     would never appear. -->
+                <Grid Grid.Row="4" ToolTipService.ToolTip="Coming soon — batch export is not built yet">
+                    <Button IsEnabled="False"
+                            HorizontalAlignment="Stretch" Height="30"
+                            Background="Transparent"
+                            BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1">
+                        <TextBlock Text="FINISH SESSION" FontSize="9" CharacterSpacing="140"
+                                   Foreground="{StaticResource Neutral800Brush}"/>
+                    </Button>
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

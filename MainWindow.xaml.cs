@@ -40,7 +40,58 @@ namespace Fastcull
             ReserveCaptionButtonSpace();
 
             Filmstrip.ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+
+            InitializeSidebar();
         }
+
+        // ------------------------------------------------------------------
+        // Sidebar (PRD 1.5)
+        // ------------------------------------------------------------------
+
+        private ViewModels.SidebarViewModel SidebarViewModel => Filmstrip.ViewModel.Sidebar;
+
+        private void InitializeSidebar()
+        {
+            SidebarPanel.Width = ViewModels.SidebarViewModel.PanelWidth;
+            SidebarPanel.Bind(SidebarViewModel);
+
+            SidebarViewModel.PropertyChanged += Sidebar_PropertyChanged;
+            ApplySidebarLayout();
+        }
+
+        private void Sidebar_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            // Both derive from IsPinned/IsHovered, so either changing is worth a re-apply. The
+            // work is two property writes; filtering it more finely would cost more than it saves.
+            if (e.PropertyName is nameof(ViewModels.SidebarViewModel.IsShown)
+                              or nameof(ViewModels.SidebarViewModel.GutterWidth)
+                              or nameof(ViewModels.SidebarViewModel.IsPinned)
+                              or nameof(ViewModels.SidebarViewModel.IsHovered))
+            {
+                ApplySidebarLayout();
+            }
+        }
+
+        /// <summary>
+        /// The only place the panel's visibility and the stage's gutter are set, so the two can
+        /// never disagree - a visible panel over a zero gutter is the overlay case, a visible
+        /// panel over a full gutter is the pinned case, and there is no third state to get wrong.
+        /// </summary>
+        private void ApplySidebarLayout()
+        {
+            SidebarPanel.Visibility = SidebarViewModel.IsShown ? Visibility.Visible : Visibility.Collapsed;
+
+            // Changing this column's width is what makes the stage recompute its slot count: the
+            // FilmstripView's SizeChanged handler already reflows on any width change, so pinning
+            // needs no special case there.
+            SidebarGutter.Width = SidebarViewModel.GutterWidth;
+        }
+
+        private void SidebarHost_PointerEntered(object sender, PointerRoutedEventArgs e)
+            => SidebarViewModel.IsHovered = true;
+
+        private void SidebarHost_PointerExited(object sender, PointerRoutedEventArgs e)
+            => SidebarViewModel.IsHovered = false;
 
         private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {

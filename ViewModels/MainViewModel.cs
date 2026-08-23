@@ -84,9 +84,22 @@ namespace Fastcull.ViewModels
 
         private SessionStore? _sessionStore;
 
+        /// <summary>
+        /// The left panel of PRD 1.5. Owned here because its tallies are a view of this class's
+        /// sequence, but kept as its own type so panel state does not accumulate on this one.
+        /// </summary>
+        public SidebarViewModel Sidebar { get; } = new();
+
+        /// <summary>
+        /// Recounts the sidebar from the current sequence. The single place this happens, called
+        /// from the two events that can change a count: the folder loading, and a rating changing.
+        /// </summary>
+        private void RefreshTally() => Sidebar.Update(Items.Select(i => i.CullState));
+
         public async Task LoadAsync()
         {
             var root = FindDefaultSampleImagesRoot();
+            Sidebar.SetFolder(root);
             var scanner = new DirectoryScanner();
             var scanned = new List<ScannedPhoto>();
 
@@ -129,6 +142,10 @@ namespace Fastcull.ViewModels
                 Items.Add(item);
                 index++;
             }
+
+            // After the restore loop, not before: stored ratings from a previous session are part
+            // of the count, so a folder reopened mid-cull shows its real progress immediately.
+            RefreshTally();
 
             SetActiveIndex(Items.Count > 0 ? 0 : -1);
         }
@@ -337,6 +354,10 @@ namespace Fastcull.ViewModels
             // Fire-and-forget: QueueRating is a non-blocking TryWrite onto the background
             // writer's channel, so the UI thread never awaits the database (PRD 3.1).
             _sessionStore?.QueueRating(item.Photo.FilePath, updated);
+
+            // Synchronous, so the sidebar's counts change in the same frame as the weight bar
+            // under the photo. A tally that lagged the mark it describes would read as a bug.
+            RefreshTally();
 
             RatingChanged?.Invoke(item);
         }

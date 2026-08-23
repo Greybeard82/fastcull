@@ -42,6 +42,41 @@
                        Text="{x:Bind Filmstrip.ViewModel.PositionText, Mode=OneWay}"/>
         </Grid>
 
-        <views:FilmstripView x:Name="Filmstrip" Grid.Row="1"/>
+        <!-- Stage row. Two columns so the sidebar can either overlay the stage or take a gutter
+             out of it, without the stage needing to know which is happening: it simply gets a
+             narrower column and its existing SizeChanged reflow does the rest.
+
+             Nothing here is x:Bind-ed. A Window is not a FrameworkElement, and binding through it
+             has already cost this project once (the title-bar converter); the sidebar's own
+             internal bindings live inside the UserControl where x:Bind behaves normally, and the
+             two layout reactions are wired explicitly in code-behind. -->
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*">
+
+            <!-- Zero-width when unpinned, so the panel overlays and no photo resizes just because
+                 the pointer drifted to the left edge. PanelWidth when pinned, so the stage
+                 reflows and the panel never covers a photo. -->
+            <Border x:Name="SidebarGutter" Grid.Column="0" Width="0" Background="#FF000000"/>
+
+            <views:FilmstripView x:Name="Filmstrip" Grid.Column="1"/>
+
+            <!-- Spans both columns and hugs the left edge: with a zero gutter it floats over the
+                 stage, with a full gutter it lands exactly inside it. -->
+            <!-- Background="Transparent" is load-bearing, not decoration: a panel with no
+                 Background is not hit-testable in WinUI, so neither PointerEntered nor
+                 PointerExited would ever fire and the sidebar could never reveal. -->
+            <Grid x:Name="SidebarHost" Grid.Column="0" Grid.ColumnSpan="2"
+                  HorizontalAlignment="Left"
+                  Background="Transparent"
+                  PointerEntered="SidebarHost_PointerEntered"
+                  PointerExited="SidebarHost_PointerExited">
+
+                <!-- Holds the host open at the hot-zone width while the panel is collapsed, so
+                     there is always something to hover. -->
+                <Border x:Name="SidebarHotZone" Width="12" HorizontalAlignment="Left"
+                        Background="Transparent"/>
+
+                <views:SidebarView x:Name="SidebarPanel" Visibility="Collapsed"/>
+            </Grid>
+        </Grid>
     </Grid>
 </Window>
