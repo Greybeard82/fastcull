@@ -225,10 +225,20 @@ namespace Fastcull.Views
         // ------------------------------------------------------------------
 
         /// <summary>
-        /// The rotate buttons sit under the centre slot but act on the ACTIVE item, which is a
-        /// different photo at the sequence boundaries (PRD 1.5 moves the active marker to an end
-        /// slot at the first and last photo). They therefore call the same MainViewModel entry
-        /// points the A/S keys do, and are never wired to "slot 1's item".
+        /// Stops a tap on the rotate buttons from bubbling up to the enclosing slot's own Tapped
+        /// handler.
+        ///
+        /// Without this the buttons sit inside their slot's tap target, so clicking one rotated
+        /// the active photo AND re-selected that slot - measured, the position counter moved from
+        /// 1/100 to 2/100 on a rotate click. Rotation must move nothing. Handling Tapped here does
+        /// not affect Button.Click, which is raised from the Button's own pointer handling.
+        /// </summary>
+        private void RotateButtons_Tapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
+
+        /// <summary>
+        /// The rotate buttons render in the ACTIVE slot - wherever that is, which at the first and
+        /// last photo of the sequence is an end slot rather than the centre (PRD 1.5). Exactly one
+        /// slot shows them, bound to the item's own IsActive.
         ///
         /// Focus is returned to this control afterwards. Keyboard is owned at window level by
         /// RootGrid_PreviewKeyDown, which tunnels from the root down and so fires wherever focus
@@ -236,16 +246,6 @@ namespace Fastcull.Views
         /// swallowed arrow keys, so the buttons are IsTabStop="False" and focus is handed back
         /// explicitly rather than left to chance.
         /// </summary>
-        /// <summary>
-        /// Stops a tap on the rotate buttons from bubbling up to the slot's own Tapped handler.
-        ///
-        /// Without this the buttons are inside slot 1's tap target, so clicking one rotated the
-        /// active photo AND selected slot 1 - measured: the position counter moved from 1/100 to
-        /// 2/100 on a rotate click. Rotation must move nothing. Handling Tapped here does not
-        /// affect Button.Click, which is raised from the Button's own pointer handling.
-        /// </summary>
-        private void RotateButtons_Tapped(object sender, TappedRoutedEventArgs e) => e.Handled = true;
-
         private void RotateLeft_Click(object sender, RoutedEventArgs e)
         {
             ViewModel.RotateActiveLeft();
