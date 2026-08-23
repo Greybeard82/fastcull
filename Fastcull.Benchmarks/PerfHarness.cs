@@ -65,6 +65,11 @@ namespace Fastcull.Benchmarks
             //               3.5 peak-working-set budget is actually about.
             await MeasureEagerFanOutAsync(retainDecodedBitmaps: false).ConfigureAwait(false);
             await MeasureEagerFanOutAsync(retainDecodedBitmaps: true).ConfigureAwait(false);
+
+            // The architecture that actually ships, as of PRD 3.3. Produces both the new
+            // peak-working-set number and the cache-hit row that had no cache to measure before.
+            await MeasureWindowedCullAsync().ConfigureAwait(false);
+
             RecordUnmeasurable();
 
             return _results;
@@ -470,19 +475,120 @@ namespace Fastcull.Benchmarks
         }
 
         // ---------------------------------------------------------------------------------
+        // The shipping architecture: sliding window, bounded pool, LRU eviction (PRD 3.3)
+        // ---------------------------------------------------------------------------------
+
+        /// <summary>
+        /// Walks the cursor through all 2,000 files the way the app does now, and reads three
+        /// PRD 3.5 rows off that one pass:
+        ///
+        ///   - Peak working set, with eviction active. The number the 5.25 GB failure was about.
+        ///   - Next/previous cache hit, which had no cache to measure until this task.
+        ///   - Peak working set with a zoom held mid-session, since the zoom tier is ~31 MB and
+        ///     lands on top of a steady-state cache rather than replacing it.
+        ///
+        /// See <see cref="WindowedCullSimulation"/> for exactly which app behaviours are
+        /// reproduced and which one modelling difference is knowingly accepted.
+        /// </summary>
+        private async Task MeasureWindowedCullAsync()
+        {
+            var photos = await ScanToListAsync(_syntheticCorpusRoot).ConfigureAwait(false);
+            var sorted = photos
+                .OrderBy(p => p.SortTime)
+                .ThenBy(p => p.CaptureSubsec)
+                .ThenBy(p => p.FilePath, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            var simulation = new WindowedCullSimulation(sorted);
+            var outcome = await simulation.RunAsync().ConfigureAwait(false);
+
+            var peakMb = outcome.PeakWorkingSetBytes / 1024.0 / 1024;
+            var trackedMb = outcome.PeakTrackedResidentBytes / 1024.0 / 1024;
+            var zoomMb = outcome.ZoomBytes / 1024.0 / 1024;
+
+            _results.Memory.Add(new MemoryResult
+            {
+                Metric = "Peak working set, 2,000 files — **PRD 3.3 window + LRU eviction (the shipping path)**",
+                Budget = "< 4 GB",
+                MeasuredMb = peakMb,
+                BudgetMb = 4096,
+                Detail = string.Create(CultureInfo.InvariantCulture,
+                    $"Cursor stepped through all {outcome.Steps:N0} photos, settling the prefetch at every step so every photo genuinely decodes. "
+                    + $"Nine stage slots (FilmstripWindow.MaxSlots - the worst case), +5/-2 window, DecodeGate at {DecodeGate.MaxConcurrency} workers, 3 GB LRU ceiling. "
+                    + $"{outcome.TotalEvictions:N0} evictions over the run. Peak {outcome.PeakResidentItems:N0} items resident at once, {trackedMb:F0} MB of tracked decoded pixels. "
+                    + $"Baseline working set {outcome.BaselineWorkingSetBytes / 1024.0 / 1024:F0} MB. Peak managed heap {outcome.PeakManagedBytes / 1024.0 / 1024:F0} MB. "
+                    + $"Walk took {outcome.Elapsed.TotalSeconds:F1} s.")
+                    + (outcome.Abort is null ? string.Empty : $" **ABORTED**: {outcome.Abort}."),
+            });
+
+            _results.Memory.Add(new MemoryResult
+            {
+                Metric = "Peak working set with a zoom held mid-session",
+                Budget = "< 4 GB",
+                MeasuredMb = outcome.PeakDuringZoomBytes / 1024.0 / 1024,
+                BudgetMb = 4096,
+                Detail = string.Create(CultureInfo.InvariantCulture,
+                    $"Sampled at photo {outcome.ZoomAtIndex:N0} of {outcome.Steps:N0}, with the cache already at steady state - not on an empty heap. "
+                    + $"Zoom tier decoded at a {outcome.ZoomLongEdge}px long edge in {outcome.ZoomDecodeMs:F0} ms, holding {zoomMb:F0} MB of BGRA8. ")
+                    + "Released immediately after, as the app does on Space/Escape or a photo change. Only one zoom is ever alive, so this does not accumulate.",
+            });
+
+            if (outcome.HitLatenciesMs.Count == 0)
+            {
+                _results.Budgets.Add(BudgetResult.NotBuilt(
+                    "Next/previous, cache hit",
+                    "< 16 ms",
+                    "The cache exists now, but this run produced no cache hit to time - every step found the "
+                    + "incoming photo undecoded, which would mean the prefetch window is not working. Treat "
+                    + "this as a harness or prefetch failure, not as a missing feature."));
+            }
+            else
+            {
+                var hitRate = outcome.CacheHits * 100.0 / Math.Max(1, outcome.CacheHits + outcome.CacheMisses);
+
+                _results.Budgets.Add(new BudgetResult
+                {
+                    Metric = "Next/previous, cache hit",
+                    Budget = "< 16 ms",
+                    MeasuredMs = Percentile(outcome.HitLatenciesMs, 0.50),
+                    BudgetMs = 16,
+                    Detail = string.Create(CultureInfo.InvariantCulture,
+                        $"n={outcome.HitLatenciesMs.Count:N0} hits, {outcome.CacheMisses:N0} misses ({hitRate:F1}% hit rate). "
+                        + $"p95 {Percentile(outcome.HitLatenciesMs, 0.95):F1} ms, max {outcome.HitLatenciesMs[^1]:F1} ms.")
+                        + " A hit is counted only where the incoming photo's display-tier bitmap was ALREADY decoded when the"
+                        + " cursor arrived - a step that had to decode is recorded as a miss, so this row cannot quietly"
+                        + " report a decode as a cache hit. **This is measured while the decode pipeline is saturated**"
+                        + " (the walk settles the prefetch at every step), so it includes GC pauses the decode work inflicts"
+                        + " on the navigating thread - see the quiesced row below, which isolates the decision itself."
+                        + " Excludes the SoftwareBitmapSource marshal (~30 ms, measured earlier in this project).",
+                });
+
+                if (outcome.QuiescedLatenciesMs.Count > 0)
+                {
+                    _results.Budgets.Add(new BudgetResult
+                    {
+                        Metric = "Next/previous, cache hit — **decision only, heap quiesced**",
+                        Budget = "< 16 ms",
+                        MeasuredMs = Percentile(outcome.QuiescedLatenciesMs, 0.50),
+                        BudgetMs = 16,
+                        Detail = string.Create(CultureInfo.InvariantCulture,
+                            $"n={outcome.QuiescedLatenciesMs.Count:N0}, p95 {Percentile(outcome.QuiescedLatenciesMs, 0.95) * 1000:F0} µs, "
+                            + $"max {outcome.QuiescedLatenciesMs[^1] * 1000:F0} µs.")
+                            + " Same navigation work - stage window, pin pass, and the coordinator's O(n) sweep over all"
+                            + " 2,000 items - with nothing decoding and the heap collected first. The gap between this and"
+                            + " the row above is not the cache: it is what GC pressure from the decode pipeline costs the"
+                            + " navigating thread while it is running flat out.",
+                    });
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------------------
         // Rows that cannot be honestly measured yet
         // ---------------------------------------------------------------------------------
 
         private void RecordUnmeasurable()
         {
-            _results.Budgets.Add(BudgetResult.NotBuilt(
-                "Next/previous, cache hit",
-                "< 16 ms",
-                "PRD 3.3's prefetch window and LRU cache do not exist - not in any form, in any session so far. "
-                + "There is no cache, therefore no cache-hit code path to time. Timing a second decode of a "
-                + "bitmap that happens to still be in memory would not be measuring this metric, it would be "
-                + "measuring a thing the app never does. Blocked on PRD 3.3."));
-
             _results.Budgets.Add(BudgetResult.NotBuilt(
                 "Enter zoom, Tier A cached",
                 "< 50 ms",

@@ -10,7 +10,7 @@ namespace Fastcull.Benchmarks
     /// Entry point for the PRD 3.5 perf harness.
     ///
     ///   dotnet run -c Release --project Fastcull.Benchmarks
-    ///   dotnet run -c Release --project Fastcull.Benchmarks -- --corpus &lt;path&gt; --out &lt;file.md&gt;
+    ///   dotnet run -c Release --project Fastcull.Benchmarks -- --corpus &lt;path&gt; --out &lt;file.md&gt; --title "..."
     ///
     /// Run in Release. A Debug run measures unoptimised code and its numbers are not comparable
     /// to the committed baseline; the harness says so loudly rather than quietly reporting them.
@@ -60,7 +60,9 @@ namespace Fastcull.Benchmarks
                     string.Create(CultureInfo.InvariantCulture,
                         $"{synthetic.FileCount:N0} (hard links over {synthetic.DistinctSourceCount} distinct files)");
 
-                var markdown = MarkdownReport.Render(results, DateTime.UtcNow.ToString("u", CultureInfo.InvariantCulture));
+                var title = ArgValue(args, "--title") ?? "FastCull performance baseline — 2026-08-23";
+                var markdown = MarkdownReport.Render(
+                    results, DateTime.UtcNow.ToString("u", CultureInfo.InvariantCulture), title);
                 Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
                 File.WriteAllText(outPath, markdown);
 
