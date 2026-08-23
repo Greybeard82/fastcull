@@ -144,7 +144,9 @@ Note that Tier B is no longer RAW-specific. A 16-bit 100 MP TIFF is a heavier de
 
 Zoom level and pan offset persist across `A` / `D` navigation.
 
-**Verification task, blocking, five minutes:** run `exiftool -PreviewImageSize -JpgFromRawLength -a *.ARW` against a real A7C II folder. If the preview is near 7008 px wide, RAW zoom is Tier A and the app is fast everywhere. If it is around 1616 x 1080, RAW zoom is Tier B for every image and the debayer performance in section 3.4 becomes the most important number in this document.
+**Verification task — done, 2026-08-23.** A 96-file survey across two camera bodies (Sony `.ARW`, Canon `.CR2`) found 100% of RAW files carry an embedded JPEG preview at full sensor width — `.ARW` at 7008 x 4672, `.CR2` at 6000 x 4000, both matching their sensor's real image width (not a masked/bordered EXIF tag). This means RAW zoom is **Tier A for both formats tested**: no debayer decode is needed, the embedded preview is usable directly.
+
+This is not a guarantee for every camera or RAW variant. Two caveats: only two bodies are represented in the survey, and a full-size preview's *dimensions* matching the sensor does not by itself confirm its JPEG compression quality survives 1:1 critical-focus inspection — that can only be confirmed once zoom mode (v0.2) is actually built and tested against it. `FullResIsCheap` in section 5.1 already encodes the fallback: any RAW file whose preview is below the 90% threshold still routes to Tier B automatically.
 
 ### 1.8 Metadata HUD
 - Toggled by `I`. Renders as a transparent overlay: `Filename`, `Format`, `Model`, `Lens`, `ISO`, `Shutter`, `Aperture`, `Focal Length`, `Timestamp` (with its source tier from 1.3), `Dimensions`, `File Size`, and the current display tier so you always know whether you are looking at real pixels.
@@ -275,9 +277,11 @@ Three stages, three different answers.
 | :--- | :--- | :--- |
 | Render / scale / pan | Already GPU accelerated by the WinUI 3 compositor | Free, nothing to do |
 | JPEG / PNG decode | Marginal; GPU decode exists but plumbing cost is high | CPU, multithreaded |
-| RAW debayer | Substantial. Roughly 250-400 ms CPU vs under 50 ms GPU at 33 MP | **CPU now, GPU later** |
+| RAW debayer | Substantial in principle (roughly 250-400 ms CPU vs under 50 ms GPU at 33 MP), but off the critical path — see below | **Deprioritized** |
 
-`IRawDebayer` is an interface with a single method. `CpuDebayer` (LibRaw) ships in v0.2. `GpuDebayer` (compute shader via Win2D or a D3D11 compute pass) is a drop-in replacement in v0.5 if measurement shows RAW zoom lands in Tier B. Building GPU debayer up front would stall the project for weeks in exchange for milliseconds on a path that may be rare.
+Per section 1.7's updated finding, RAW zoom is Tier A for every file surveyed so far, which means debayer performance is no longer the critical path it was assumed to be. The GPU-debayer contingency for v0.5 is deprioritized on this basis.
+
+**Open gap, not silently resolved:** no working debayer implementation currently exists in this codebase. `LibRawSharp` (the package this PRD originally named) was evaluated and found unusable — no native binary ships with it, and it exposes no preview-extraction API either. If a future RAW file is ever encountered whose embedded preview genuinely falls below the `FullResIsCheap` threshold, it will currently have **no full-resolution decode path at all** and would need to degrade to the upscaled-preview-with-decoding-indicator behaviour section 1.7 describes for Tier B, indefinitely, since there is nothing to decode with. `IRawDebayer` remains an unimplemented interface. If this gap needs closing, `Magick.NET-Q16-HDRI-x64` is the next candidate to spike, not LibRaw.
 
 ### 3.5 Performance Budgets
 These are the acceptance criteria. Each becomes an automated benchmark; a regression greater than 25% fails the build.
@@ -423,7 +427,7 @@ public enum CompanionKind { Raw, Jpeg, Heif, Xmp, Other }
 ### 5.2 Dependencies
 - `Microsoft.WindowsAppSDK`
 - `Microsoft.Data.Sqlite`
-- `LibRawSharp` or `Magick.NET-Q16-HDRI-x64` (RAW only, spike before building on it)
+- ~~`LibRawSharp` or `Magick.NET-Q16-HDRI-x64` (RAW only, spike before building on it)~~ — **neither is a dependency of the shipped code.** RAW decoding uses only WIC, via embedded-preview extraction (section 3.2). `LibRawSharp` was spiked and rejected: it ships no native binary (`DllNotFoundException: LibRawNative.dll`) and exposes no preview-extraction API. `Magick.NET-Q16-HDRI-x64` was never evaluated, because the embedded-preview path made it unnecessary. Either remains a future candidate only if section 3.4's debayer gap ever needs closing.
 - `MetadataExtractor` (fast header parsing across RAW, JPEG, PNG, TIFF, HEIF without invoking a decoder)
 - `CommunityToolkit.Mvvm`
 - `System.Threading.Channels` (in-box)
@@ -453,7 +457,8 @@ Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate comm
 
 | Risk | Impact | Mitigation |
 | :--- | :--- | :--- |
-| A7C II embedded preview is undersized | Every RAW zoom takes the slow Tier B path | Verify with exiftool before coding; GPU debayer pre-planned in 3.4 |
+| ~~A7C II embedded preview is undersized~~ **Closed 2026-08-23** | Would have made every RAW zoom take the slow Tier B path | Checked, and thoroughly: 96 files across two bodies, 100% carry a full-sensor-width preview, so RAW zoom is Tier A (1.7). Residual risk is quality, not size, and is unmeasurable until zoom exists in v0.2 |
+| No debayer exists if a Tier-B RAW file is ever encountered | A RAW file whose preview falls below the `FullResIsCheap` threshold has **no** full-resolution decode path at all, and would stay on the upscaled preview indefinitely | Accepted for now — the surveyed corpus has no such file. `FullResIsCheap` already routes correctly; only the destination is missing. Spike `Magick.NET-Q16-HDRI-x64` if one ever appears (3.4) |
 | RAW decoder NuGet package unmaintained or missing RAW delegate | Blocked on the core format | Ten-minute spike before v0.1 slice 3; JPEG/PNG path via WIC is unaffected |
 | WIC RAW codec absent on target machine | Cannot open RAW at all | LibRaw primary for RAW |
 | PNG and TIFF have no embedded thumbnail | Scan of a large PNG folder becomes a full decode storm | Generate once, cache as blob, downscaled decode only |
@@ -467,5 +472,5 @@ Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate comm
 
 ## 8. Open Questions
 
-1. The five-minute exiftool check in section 1.7. Blocking.
+1. ~~The five-minute exiftool check in section 1.7. Blocking.~~ **Resolved 2026-08-23** — answered by measurement rather than exiftool: 96 files, two bodies, 100% Tier A. See 1.7.
 2. Confirm **Paired** as the default RAW+JPEG mode (section 1.4). Defaulted, not yet confirmed.
