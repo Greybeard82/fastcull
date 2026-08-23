@@ -35,10 +35,17 @@
         <!-- ================================ STAGE ================================
              Three consecutive photos (PRD 1.5), the active one centred except at the
              sequence ends. Padding and gap are the handoff's literal values. -->
-        <Border Grid.Row="0" Padding="{StaticResource StagePadding}">
-            <Grid x:Name="Stage" ColumnDefinitions="1*,1*,1*"
-                  ColumnSpacing="{StaticResource StageColumnSpacing}"
-                  SizeChanged="Stage_SizeChanged">
+        <!-- StageHost owns the available space; Stage sizes to its content and centres inside it.
+             Auto columns are load-bearing: with star columns each slot got a fixed third of the
+             stage whether it needed it or not, so a portrait photo sat in a landscape-sized cell
+             and the visible gap became cell-width-minus-photo-width - hundreds of pixels - while
+             ColumnSpacing sat there saying 5. Auto columns take exactly the frame width ApplySlot
+             assigns, which makes the gap literally the gap. -->
+        <Border x:Name="StageHost" Grid.Row="0" Padding="{StaticResource StagePadding}"
+                SizeChanged="StageHost_SizeChanged">
+            <Grid x:Name="Stage" ColumnDefinitions="Auto,Auto,Auto"
+                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                  ColumnSpacing="{StaticResource StageColumnSpacing}">
 
                 <!-- Slot 0 -->
                 <StackPanel Grid.Column="0" Tag="0" Tapped="Slot_Tapped" Spacing="12" Background="Transparent"

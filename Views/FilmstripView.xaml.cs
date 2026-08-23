@@ -71,7 +71,7 @@ namespace Fastcull.Views
         // Equal-height rule
         // ------------------------------------------------------------------
 
-        private void Stage_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateStageLayout();
+        private void StageHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateStageLayout();
 
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
@@ -129,15 +129,12 @@ namespace Fastcull.Views
         /// </summary>
         private void UpdateStageLayout()
         {
-            var stageWidth = Stage.ActualWidth;
-            var stageHeight = Stage.ActualHeight;
-            if (stageWidth <= 0 || stageHeight <= 0) return;
-
-            // Read the spacing the Grid actually applied rather than a local constant, so the
-            // cell width is always derived from the layout that is really on screen.
-            var cellWidth = StageLayout.ComputeCellWidth(stageWidth, Stage.ColumnSpacing, columnCount: 3);
-            var cellHeight = stageHeight - CellChromeHeight;
-            if (cellWidth <= 0 || cellHeight <= 0) return;
+            // Available space comes from the host, not from Stage: Stage now sizes to its own
+            // content and centres, so its ActualWidth is the photos' width, not the room they have.
+            var availableWidth = StageHost.ActualWidth - StageHost.Padding.Left - StageHost.Padding.Right;
+            var availableHeight = StageHost.ActualHeight - StageHost.Padding.Top - StageHost.Padding.Bottom
+                                  - CellChromeHeight;
+            if (availableWidth <= 0 || availableHeight <= 0) return;
 
             var aspects = new List<double>(3);
             foreach (var item in new[] { ViewModel.Slot0Item, ViewModel.Slot1Item, ViewModel.Slot2Item })
@@ -147,9 +144,13 @@ namespace Fastcull.Views
                 if (item is not null) aspects.Add(item.EffectiveAspectRatio);
             }
 
+            // Read the spacing the Grid actually applied rather than a local constant, so the
+            // arithmetic is always derived from the layout that is really on screen.
+            var totalGaps = StageLayout.ComputeTotalGapWidth(aspects.Count, Stage.ColumnSpacing);
+
             // The rule itself lives in Fastcull.Core so it can be unit-tested against the
             // portrait/mixed-aspect cases the all-landscape sample corpus never produces.
-            var sharedHeight = StageLayout.ComputeSharedHeight(cellWidth, cellHeight, aspects);
+            var sharedHeight = StageLayout.ComputeSharedHeight(availableWidth, availableHeight, totalGaps, aspects);
             if (sharedHeight <= 0) return;
 
             ApplySlot(ViewModel.Slot0Item, Slot0Frame, Slot0Image, Slot0Rotate, Slot0Tick, Slot0Bar, sharedHeight);
