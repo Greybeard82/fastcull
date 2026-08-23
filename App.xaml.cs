@@ -33,29 +33,59 @@ namespace Fastcull
         /// Initializes the singleton application object.  This is the first line of authored code
         /// executed, and as such is the logical equivalent of main() or WinMain().
         /// </summary>
+        // Fixed, well-known path so evidence survives regardless of Output-window/pipe timing -
+        // File.AppendAllText opens, writes, and closes synchronously on every call, so nothing is
+        // buffered that a fail-fast an instant later could lose.
+        private static readonly string CrashLogPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "fastcull-crash.log");
+
         public App()
         {
             // Last-resort net, not a substitute for guarding call sites: catches exceptions of
             // this general shape (thrown across a XAML/native callback boundary, or in a Task
             // nobody awaited) that would otherwise fail-fast the whole process instead of
-            // raising a normal catchable exception. See Converters/BoolToAccentBrushConverter.cs
-            // and ViewModels/FilmstripItemViewModel.cs for the actual fixes at the two known
-            // unguarded call sites.
+            // raising a normal catchable exception. FirstChanceException and AppDomain's own
+            // UnhandledException are logged in addition to WinUI's Application-level ones, since
+            // between them they cover every point an exception could be first thrown or finally
+            // go unhandled, however it crosses the ABI boundary.
+            AppDomain.CurrentDomain.FirstChanceException += OnFirstChanceException;
+            AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
             UnhandledException += OnUnhandledException;
             TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
             InitializeComponent();
         }
 
+        private static void LogToFile(string source, string details)
+        {
+            try
+            {
+                File.AppendAllText(CrashLogPath, $"[{DateTime.Now:HH:mm:ss.fff}] {source}{Environment.NewLine}{details}{Environment.NewLine}---{Environment.NewLine}");
+            }
+            catch
+            {
+                // Logging itself must never throw across this boundary.
+            }
+        }
+
+        private void OnFirstChanceException(object? sender, System.Runtime.ExceptionServices.FirstChanceExceptionEventArgs e)
+        {
+            LogToFile("FirstChanceException", e.Exception.ToString());
+        }
+
+        private void OnAppDomainUnhandledException(object sender, System.UnhandledExceptionEventArgs e)
+        {
+            LogToFile("AppDomain.UnhandledException", (e.ExceptionObject as Exception)?.ToString() ?? e.ExceptionObject?.ToString() ?? "(null exception object)");
+        }
+
         private void OnUnhandledException(object sender, Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine($"[FastCull] Unhandled exception: {e.Exception}");
+            LogToFile("Application.UnhandledException", e.Exception.ToString());
             e.Handled = true;
         }
 
         private void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
         {
-            System.Diagnostics.Debug.WriteLine($"[FastCull] Unobserved task exception: {e.Exception}");
+            LogToFile("TaskScheduler.UnobservedTaskException", e.Exception.ToString());
             e.SetObserved();
         }
 
