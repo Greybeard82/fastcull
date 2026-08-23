@@ -54,9 +54,12 @@ namespace Fastcull.Input
                 case VirtualKey.NumberPad5: return new ResolvedInput(AppCommand.SetStars, 5);
                 case VirtualKey.Number0:
                 case VirtualKey.NumberPad0: return new ResolvedInput(AppCommand.SetStars, 0);
-                case VirtualKey.P: return new ResolvedInput(AppCommand.SetPicked, 0);
-                case VirtualKey.X: return new ResolvedInput(AppCommand.SetRejected, 0);
-                case VirtualKey.U: return new ResolvedInput(AppCommand.SetUnflagged, 0);
+                // Z/X/C sit adjacent under the left hand so the ladder can be driven without
+                // looking down (PRD 2.1). Note X is reassigned, not inherited: it used to mean
+                // Rejected and now means Unflagged. P and U are deliberately unmapped.
+                case VirtualKey.C: return new ResolvedInput(AppCommand.SetPicked, 0);
+                case VirtualKey.Z: return new ResolvedInput(AppCommand.SetRejected, 0);
+                case VirtualKey.X: return new ResolvedInput(AppCommand.SetUnflagged, 0);
             }
 
             return isExtendedKey ? ResolveExtended(key) : ResolveNumpad(key);

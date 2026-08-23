@@ -111,20 +111,57 @@ public class InputRouterTests
     }
 
     [Theory]
-    [InlineData(VirtualKey.P, AppCommand.SetPicked)]
-    [InlineData(VirtualKey.X, AppCommand.SetRejected)]
-    [InlineData(VirtualKey.U, AppCommand.SetUnflagged)]
+    [InlineData(VirtualKey.C, AppCommand.SetPicked)]
+    [InlineData(VirtualKey.Z, AppCommand.SetRejected)]
+    [InlineData(VirtualKey.X, AppCommand.SetUnflagged)]
     public void FlagLetterKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
     {
         Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
         Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
     }
 
+    [Fact]
+    public void X_IsUnflagged_NotRejected_AfterTheRemap()
+    {
+        // X was reassigned rather than removed: it used to mean Rejected. A stale duplicate
+        // mapping here would silently reject photos the user meant to clear.
+        Assert.Equal(AppCommand.SetUnflagged, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
+        Assert.NotEqual(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
+    }
+
+    [Theory]
+    [InlineData(VirtualKey.P)]
+    [InlineData(VirtualKey.U)]
+    public void OldFlagKeys_AreNowFullyUnmapped(VirtualKey key)
+    {
+        // P and U are not retained as aliases (PRD 2.1). Asserted explicitly rather than
+        // just deleted from the old theory - a removed test proves nothing.
+        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: true).Command);
+        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: false).Command);
+    }
+
+    [Fact]
+    public void NewFlagKeys_DoNotCollideWithNumpadOrNavigationLogic()
+    {
+        // Z/X/C are not numpad keys on any standard layout, so the extended-key split must
+        // not change their meaning. Verified rather than assumed.
+        foreach (var key in new[] { VirtualKey.Z, VirtualKey.X, VirtualKey.C })
+        {
+            var extended = InputRouter.Resolve(key, isExtendedKey: true);
+            var notExtended = InputRouter.Resolve(key, isExtendedKey: false);
+
+            Assert.Equal(extended.Command, notExtended.Command);
+            Assert.Equal(extended.Payload, notExtended.Payload);
+            Assert.NotEqual(AppCommand.None, extended.Command);
+            Assert.NotEqual(AppCommand.SetStars, extended.Command);
+        }
+    }
+
     // ---- Everything else is None ----
 
     [Theory]
     [InlineData(VirtualKey.A)]
-    [InlineData(VirtualKey.Z)]
+    [InlineData(VirtualKey.Q)]
     [InlineData(VirtualKey.Space)]
     [InlineData(VirtualKey.Enter)]
     [InlineData(VirtualKey.Escape)]
