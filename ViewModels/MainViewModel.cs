@@ -206,7 +206,21 @@ namespace Fastcull.ViewModels
                 StageItems.RemoveAt(StageItems.Count - 1);
 
             PinStageItems();
+
+            // Pinning must settle before the coordinator runs: it treats pinned items as
+            // never-cancel, never-evict, and at a nine-photo stage the stage is wider than the
+            // window's own lookbehind.
+            _prefetch.OnCursorMoved(ActiveIndex, Items);
         }
+
+        /// <summary>Sliding window, bounded pool and LRU eviction (PRD 3.3).</summary>
+        private readonly PrefetchCoordinator _prefetch = new();
+
+        /// <summary>Resident decoded bytes at the last cursor move. Surfaced for the perf harness.</summary>
+        public long ResidentBytes => _prefetch.ResidentBytes;
+
+        /// <summary>The prefetch range currently held. Surfaced for the perf harness.</summary>
+        public PrefetchRange PrefetchRange => _prefetch.CurrentRange;
 
         /// <summary>
         /// Marks exactly the on-stage photos as pinned, and makes sure they are loading.
