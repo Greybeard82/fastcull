@@ -89,9 +89,19 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
 - **Filmstrip:** virtualized horizontal scroller sized for 21:9 and 32:9. Active image scales to viewport height, neighbours flank left and right at reduced height.
 - **State mark (Chromeless):** state reads as a **3px weight bar directly beneath the photo**, spanning its full rendered width — neutral grey when unrated, green when picked, red-brown when rejected. Stars render as a run of `★` in the caption row beside the filename. There are **no borders around photos anywhere in the app**.
 - **Active indicator:** the active photo carries a **thin accent tick above it**, 2px tall and 18% of the photo's rendered width, centred. The active photo's filename also brightens to the accent tone while the flanking two stay muted. State and active-ness are therefore never confused — one reads below the photo, the other above it.
-- **Three-slot window rule:** the top region always shows three consecutive photos. The active photo is the **centre** slot, except at the sequence boundaries: when the active photo is the **first** in the sequence the active marker sits on the **left** slot, and when it is the **last** it sits on the **right** slot. The window itself does not scroll past either end.
+- **Window rule:** the top region shows a run of consecutive photos with the active one in the **centre** slot, except at the sequence boundaries: when the active photo is the **first** in the sequence the active marker sits on the **leftmost** slot, and when it is the **last** it sits on the **rightmost**. The window itself does not scroll past either end.
+- **Variable slot count:** the number of photos on stage is **not fixed at three**. The stage expands outward from the active photo while the set is still *height*-bound — that is, while the shared height is clamped by the available height and the set therefore does not yet span the width. Three portrait photos on a wide stage leave most of the width unused, and that slack is spent on more photos rather than left black. Once width becomes the binding constraint the set already fills the stage and another photo would only shrink every photo, so expansion stops.
+  - Counts stay **odd**, so "the active photo is the centre slot" is literally true; an even count has no centre.
+  - Hard cap of **9**. This is not cosmetic: every staged photo holds a display-tier decode, and the peak-working-set budget in §3.5 already fails (see §3.3). An uncapped rule on an ultrawide full of extreme crops would make that materially worse.
 - **Stage spacing:** photos sit **5px apart** with **8px outer horizontal padding**, so the stage runs nearly the full window width. This is deliberate — the goal is maximum photo real estate. Vertical padding is *not* squeezed to match: it carries the accent tick above and the weight bar and caption below, which are the entire state read in this design.
-- **Equal-height rule:** all three photos are drawn at one shared height, `min(availableCellHeight, availableCellWidth / widestVisibleAspect)`, with each photo's width following its own aspect at that height. Nothing is ever cropped, and a portrait frame simply sits narrower beside a landscape one. Rotation (§1.11) feeds this rule its *post-rotation* aspect.
+  - The spacing is only meaningful because **slots size to their photo**. When each slot took a fixed share of the stage instead, a portrait photo sat in a landscape-sized cell and the visible space between photos became cell-width-minus-photo-width — hundreds of pixels — with the spacing setting having no say in it.
+- **Equal-height rule:** every photo on stage is drawn at one shared height:
+
+  `sharedHeight = min(availableHeight, (availableWidth − totalGapWidth) / sumOfVisibleAspects)`
+
+  with each photo's width following its own aspect at that height. This solves the set's real total width (`height × Σaspects + gaps`) rather than assuming each photo needs an equal share. Nothing is ever cropped, and a portrait frame simply sits narrower beside a landscape one. Rotation (§1.11) feeds this rule its *post-rotation* aspect, so rotating one photo can resize its neighbours.
+  - The rule agrees exactly with a per-photo-equal-share rule whenever the visible photos share an aspect, so the common all-landscape case is unchanged; it differs — in favour of larger photos — only when aspects are mixed.
+- **Caption row height is fixed and identical in every slot.** The rotate buttons (§1.11) live in that row and are taller than its text; letting them size it made the active slot taller than its neighbours and, with the slots vertically centred, pushed that photo up by half the excess.
 
 > **Superseded:** this section previously described concentric red/yellow/green state borders with an outer blue active ring, and a numeric star badge in the photo's bottom-right corner. That was the pre-Chromeless visual pass. The borders are gone, replaced by the weight bar and accent tick above.
 
@@ -176,7 +186,7 @@ Controls are held to the same rule in **every visual state**, not just at rest. 
 A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied to the **selected** photo.
 
 - `A` turns 90° **clockwise**; `S` turns 90° **counter-clockwise**. Both wrap: four turns in either direction return the photo to where it started. Note that `A` sits physically left of `S` while meaning "right" — this is deliberate.
-- Two small buttons in the caption row beneath the **centre** slot, right-aligned, do the same thing. They stay under the centre slot regardless, but always act on whatever photo is **active** — which is an end slot at the sequence boundaries, per §1.5's three-slot rule.
+- Two small buttons in the caption row, right-aligned, do the same thing. They render in the **active** slot — wherever that is, which at the first and last photo of the sequence is an end slot rather than the centre (§1.5). Exactly one slot shows them at a time, and they act on the active photo.
 - **Rotation is a delta on top of whatever orientation the decode produced, never an absolute orientation of the final image.** The decoded baseline is not uniform across formats today — WIC applies EXIF orientation for JPEG and friends but not for RAW (see §7) — so a delta is the only thing that means the same in both cases. Note the corollary: if the RAW baseline is fixed later, a delta stored against the *old* baseline for an affected file becomes wrong. See §7 for the bounded set that applies to.
 - **It is a display transform and never a re-decode.** Re-decoding would spend a decode on a transform, blow the §3.5 keypress budget, and invalidate cache entries once §3.3 exists.
 - Rotation **does not alter the cull state and does not move the cursor.** Rating and rotation are fully independent axes, and a write to one never disturbs the other in the database (§3.1).
@@ -228,6 +238,18 @@ Input routing is an explicit two-state machine, handled in one place at window l
 
 ### 2.3 Key Repeat
 Holding `Right` must not queue 40 navigation events that replay after release. Navigation input is coalesced: the cursor moves at a fixed maximum rate (suggest 15 per second) and the decode pipeline targets only the settled position, not every intermediate index.
+
+### 2.5 Navigation transition
+
+Moving between photos animates rather than snapping, in both regions: the stage slides by one slot pitch, and the bottom filmstrip scrolls to re-centre the active thumbnail. Duration is short enough not to sit between the user and the next photo — currently **110 ms**, eased out — and is a single named value so it can be tuned in one place.
+
+Three properties are behavioural contract, not styling:
+
+1. **The state change is immediate; the animation is decorative.** The active index, the cull state and the stage layout all update on the keypress. Nothing — not a rating, not a decode, not the next navigation — ever waits for a transition to finish.
+2. **Interruptible and coalescing.** A navigation arriving mid-animation *retargets* the in-flight one; it never enqueues another. Holding an arrow key fires navigations far faster than the animation completes, and the transition must converge on the settled position rather than fall behind a backlog.
+3. **It never fights direct manipulation.** The filmstrip's pointer-drag path writes the scroll offset directly, so the re-centring animation does not run against a drag in progress and does not snap back on release.
+
+The bottom filmstrip must keep the active thumbnail in view on **every** navigation, whatever its source — keyboard, a stage click, or a thumbnail click.
 
 ### 2.4 Keyboard ownership
 
@@ -325,10 +347,13 @@ These are the acceptance criteria. Each becomes an automated benchmark; a regres
 | Enter zoom, Tier B | < 400 ms CPU, < 100 ms GPU path |
 | Rating keypress to border change | < 16 ms |
 | Rotation keypress to photo turning | < 16 ms |
+| Navigation keypress to new active state | < 16 ms |
 | Pan at 1:1 | Sustained 60 fps minimum |
 | Peak working set, 2,000 files | < 4 GB system RAM |
 
 Rotation is held to the same bar as a rating keypress for the same reason: both are transforms of state already in memory, neither touches the decode pipeline. A rotation that needed a re-decode would fail this budget by an order of magnitude, which is why §1.11 forbids it.
+
+**The navigation budget is measured to the state change, not to animation completion.** The active index, the stage window and the chrome must all be correct within 16 ms of the keypress; the transition in §2.5 then plays out over roughly 110 ms as decoration. Measuring to the end of the animation would be measuring the animation's duration, which is a design choice rather than a performance property — and would create pressure to shorten a transition that is deliberately visible. A navigation that *waited* for the previous animation would fail this budget, which is why §2.5 requires retargeting rather than queueing.
 
 Benchmarks run against three fixture sets: all-RAW, all-JPEG, and mixed. The mixed set is the one that finds bugs.
 
