@@ -14,7 +14,7 @@
         <MicaBackdrop />
     </Window.SystemBackdrop>
 
-    <Grid>
-        <views:FilmstripView/>
+    <Grid x:Name="RootGrid" PreviewKeyDown="RootGrid_PreviewKeyDown">
+        <views:FilmstripView x:Name="Filmstrip"/>
     </Grid>
 </Window>

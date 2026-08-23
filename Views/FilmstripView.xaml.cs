@@ -38,19 +38,9 @@ namespace Fastcull.Views
             await ViewModel.LoadAsync();
         }
 
-        private void FilmstripView_KeyDown(object sender, KeyRoutedEventArgs e)
-        {
-            if (e.Key == VirtualKey.Left)
-            {
-                ViewModel.MovePrevious();
-                e.Handled = true;
-            }
-            else if (e.Key == VirtualKey.Right)
-            {
-                ViewModel.MoveNext();
-                e.Handled = true;
-            }
-        }
+        // Keyboard is handled once at window level (MainWindow.RootGrid_PreviewKeyDown), per
+        // PRD 2.2 and 2.4. Handling KeyDown here failed as soon as focus moved into the bottom
+        // ScrollViewer, which consumed arrow keys before this control ever saw them.
 
         private void PreviousSlot_Tapped(object sender, TappedRoutedEventArgs e)
         {

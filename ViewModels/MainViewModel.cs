@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
+using Fastcull.Input;
 using Fastcull.Services;
 
 namespace Fastcull.ViewModels
@@ -84,6 +85,32 @@ namespace Fastcull.ViewModels
 
         public void MovePrevious() => SetActiveIndex(ActiveIndex - 1);
         public void MoveNext() => SetActiveIndex(ActiveIndex + 1);
+        public void MoveFirst() => SetActiveIndex(0);
+        public void MoveLast() => SetActiveIndex(Items.Count - 1);
+
+        /// <summary>
+        /// Applies a resolved input command. Navigation changes only the cursor; rating changes
+        /// only the active item's state. The two never affect each other (PRD 2.1, D.2).
+        /// </summary>
+        public void Execute(ResolvedInput input)
+        {
+            switch (input.Command)
+            {
+                case AppCommand.NavigatePrevious: MovePrevious(); break;
+                case AppCommand.NavigateNext: MoveNext(); break;
+                case AppCommand.NavigateFirst: MoveFirst(); break;
+                case AppCommand.NavigateLast: MoveLast(); break;
+
+                // Rating commands are implemented in Task D, once CullState exists.
+                case AppCommand.LadderUp:
+                case AppCommand.LadderDown:
+                case AppCommand.SetStars:
+                case AppCommand.SetPicked:
+                case AppCommand.SetRejected:
+                case AppCommand.SetUnflagged:
+                    break;
+            }
+        }
 
         private static string FindDefaultSampleImagesRoot()
         {

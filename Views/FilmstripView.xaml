@@ -9,8 +9,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
     IsTabStop="True"
-    Loaded="FilmstripView_Loaded"
-    KeyDown="FilmstripView_KeyDown">
+    Loaded="FilmstripView_Loaded">
 
     <UserControl.Resources>
         <conv:BoolToAccentBrushConverter x:Key="ActiveToBrushConverter"/>
@@ -86,12 +85,13 @@
                       HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Auto"
                       VerticalScrollMode="Disabled" VerticalScrollBarVisibility="Hidden"
                       ZoomMode="Disabled"
+                      IsTabStop="False" XYFocusKeyboardNavigation="Disabled"
                       PointerWheelChanged="BottomScroll_PointerWheelChanged"
                       PointerPressed="BottomScroll_PointerPressed"
                       PointerMoved="BottomScroll_PointerMoved"
                       PointerReleased="BottomScroll_PointerReleased"
                       PointerCaptureLost="BottomScroll_PointerReleased">
-            <ItemsRepeater x:Name="ThumbRepeater" ItemsSource="{x:Bind ViewModel.Items}">
+            <ItemsRepeater x:Name="ThumbRepeater" ItemsSource="{x:Bind ViewModel.Items}" IsTabStop="False">
                 <ItemsRepeater.Layout>
                     <StackLayout Orientation="Horizontal" Spacing="8"/>
                 </ItemsRepeater.Layout>
