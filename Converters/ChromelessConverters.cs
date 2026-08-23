@@ -109,6 +109,20 @@ namespace Fastcull.Converters
             => throw new NotSupportedException();
     }
 
+    /// <summary>
+    /// Hides an element when the bool is true - used to collapse the filmstrip band and the
+    /// title bar while zoomed. Collapsed rather than hidden so the row genuinely gives its
+    /// height back to the stage.
+    /// </summary>
+    public sealed class BoolToCollapsedConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, string language)
+            => value is true ? Visibility.Collapsed : Visibility.Visible;
+
+        public object ConvertBack(object value, Type targetType, object parameter, string language)
+            => throw new NotSupportedException();
+    }
+
     /// <summary>Inactive thumbnails sit back to 0.42 opacity; the active one is fully lit.</summary>
     public sealed class BoolToThumbnailOpacityConverter : IValueConverter
     {

@@ -67,6 +67,19 @@ namespace Fastcull.Views
         /// <summary>The in-flight stage slide, retargeted rather than queued on rapid navigation.</summary>
         private Storyboard? _slide;
 
+        /// <summary>The in-flight rotation sweep, and the transform it is driving.</summary>
+        private Storyboard? _rotate;
+        private RotateTransform? _rotateDelta;
+
+        /// <summary>The in-flight zoom transition.</summary>
+        private Storyboard? _zoom;
+
+        /// <summary>The stage's normal padding, so zoom can reclaim it and give it back.</summary>
+        private Thickness _stagePadding;
+
+        /// <summary>The one item currently holding a zoom-tier decode, so it can be released.</summary>
+        private FilmstripItemViewModel? _zoomLoadedItem;
+
         /// <summary>
         /// Navigation slide duration. Fast enough not to sit between the user and the next photo,
         /// slow enough to read as movement. Declared once in Themes/Nocturne.xaml so it is
@@ -83,8 +96,10 @@ namespace Fastcull.Views
         public FilmstripView()
         {
             InitializeComponent();
+            _stagePadding = StageHost.Padding;
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
             ViewModel.StageItems.CollectionChanged += StageItems_CollectionChanged;
+            ViewModel.RotationChanged += OnRotationChanged;
         }
 
         private async void FilmstripView_Loaded(object sender, RoutedEventArgs e)
@@ -120,12 +135,166 @@ namespace Fastcull.Views
             UpdateStageLayout();
             AnimateStageSlide();
             CenterOn(ViewModel.ActiveIndex);
+            RefreshZoomImage();
+        }
+
+        /// <summary>
+        /// Keeps exactly one zoom-tier decode alive: the active photo's, and only while zoomed.
+        ///
+        /// The display tier is sized for a filmstrip slot (~960px), so stretching it across a
+        /// whole screen is visibly soft. This asks for a decode sized to the viewport instead, in
+        /// physical pixels - RasterizationScale matters here, since on a 150% display a
+        /// 1400-DIP viewport is 2100 real pixels and decoding to 1400 would still be soft.
+        ///
+        /// The previous photo's zoom image is released before the next is requested, so switching
+        /// photos while zoomed never accumulates viewport-sized bitmaps. That restraint matters
+        /// more than usual: the stage's own retention problem (PRD 3.3, still unbuilt) is already
+        /// the largest memory risk in the app, and this must not stack on top of it.
+        /// </summary>
+        private void RefreshZoomImage()
+        {
+            if (!ViewModel.IsZoomed)
+            {
+                _zoomLoadedItem?.ReleaseZoomImage();
+                _zoomLoadedItem = null;
+                return;
+            }
+
+            var item = ViewModel.ActiveItem;
+            if (item is null || ReferenceEquals(item, _zoomLoadedItem)) return;
+
+            _zoomLoadedItem?.ReleaseZoomImage();
+            _zoomLoadedItem = item;
+
+            var scale = XamlRoot?.RasterizationScale ?? 1.0;
+            if (scale <= 0) scale = 1.0;
+
+            var longEdgeDips = Math.Max(StageHost.ActualWidth, StageHost.ActualHeight);
+            if (longEdgeDips <= 0) return;
+
+            var longEdge = (uint)Math.Clamp(Math.Ceiling(longEdgeDips * scale), 1, 8192);
+
+            // Fire-and-forget by design: the display-tier image is already on screen, so nothing
+            // is waiting on this. It swaps itself in when it lands.
+            _ = item.LoadZoomImageAsync(longEdge);
         }
 
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
             if (e.PropertyName == nameof(MainViewModel.ActiveIndex))
                 OnNavigated();
+            else if (e.PropertyName == nameof(MainViewModel.IsZoomed))
+                OnZoomChanged();
+        }
+
+        /// <summary>
+        /// Grows the active photo into the whole stage, or puts it back.
+        ///
+        /// Measured rather than modelled: the photo's rect is read off the live visual tree before
+        /// the change and again after, and the animation is whatever transform maps the second
+        /// onto the first. That avoids re-deriving the layout arithmetic here and stays correct as
+        /// the stage rules change. UpdateLayout() forces the intervening layout pass to complete
+        /// synchronously so the "after" measurement is real rather than stale.
+        ///
+        /// Same shape as the slide and the rotation sweep: the end state is applied instantly and
+        /// the animation runs backwards from where things were, settling at identity.
+        /// </summary>
+        private void OnZoomChanged()
+        {
+            var before = MeasureActivePhoto();
+
+            // The host's padding is part of what zoom reclaims.
+            StageHost.Padding = ViewModel.IsZoomed ? new Thickness(0) : _stagePadding;
+
+            UpdateStageLayout();
+            StageHost.UpdateLayout();
+
+            // The window start moved because the slot count changed; forget it so the next
+            // navigation does not animate a slide across a shift that was never a navigation.
+            _lastWindowStart = ViewModel.StageItems.Count > 0 ? ViewModel.StageItems[0].Index : -1;
+
+            RefreshZoomImage();
+
+            var after = MeasureActivePhoto();
+            if (before is null || after is null) return;
+
+            AnimateZoom(before.Value, after.Value);
+        }
+
+        /// <summary>Centre and height of the active photo's frame, in StageHost coordinates.</summary>
+        private (Point Centre, double Height)? MeasureActivePhoto()
+        {
+            var slot = ViewModel.StageItems.IndexOf(ViewModel.ActiveItem!);
+            if (slot < 0) return null;
+
+            if (StageRepeater.TryGetElement(slot) is not FrameworkElement container) return null;
+            if (container.FindName("StageFrame") is not FrameworkElement frame) return null;
+            if (frame.ActualHeight <= 0) return null;
+
+            var centre = frame.TransformToVisual(StageHost)
+                              .TransformPoint(new Point(frame.ActualWidth / 2, frame.ActualHeight / 2));
+
+            return (centre, frame.ActualHeight);
+        }
+
+        /// <summary>
+        /// Animates the stage from where the active photo used to be to where it now is.
+        ///
+        /// The scale is about StageSlide's own centre, so the translate has to be expressed
+        /// relative to that centre too: a point p maps to C + (p - C) * s + t, and solving for
+        /// "after lands on before" gives t = before - C - (after - C) * s.
+        /// </summary>
+        private void AnimateZoom((Point Centre, double Height) before, (Point Centre, double Height) after)
+        {
+            if (after.Height <= 0 || before.Height <= 0) return;
+
+            var scale = before.Height / after.Height;
+
+            var origin = StageSlide.TransformToVisual(StageHost)
+                                   .TransformPoint(new Point(StageSlide.ActualWidth / 2, StageSlide.ActualHeight / 2));
+
+            var offsetX = before.Centre.X - origin.X - ((after.Centre.X - origin.X) * scale);
+            var offsetY = before.Centre.Y - origin.Y - ((after.Centre.Y - origin.Y) * scale);
+
+            _zoom?.Stop();
+            _slide?.Stop();
+
+            StageZoomTransform.ScaleX = scale;
+            StageZoomTransform.ScaleY = scale;
+            StageSlideTransform.X = offsetX;
+            StageSlideTransform.Y = offsetY;
+
+            _zoom = new Storyboard();
+            AddSettleToIdentity(_zoom, StageZoomTransform, "ScaleX", scale, 1);
+            AddSettleToIdentity(_zoom, StageZoomTransform, "ScaleY", scale, 1);
+            AddSettleToIdentity(_zoom, StageSlideTransform, "X", offsetX, 0);
+            AddSettleToIdentity(_zoom, StageSlideTransform, "Y", offsetY, 0);
+
+            _zoom.Completed += (_, _) =>
+            {
+                StageZoomTransform.ScaleX = 1;
+                StageZoomTransform.ScaleY = 1;
+                StageSlideTransform.X = 0;
+                StageSlideTransform.Y = 0;
+            };
+            _zoom.Begin();
+        }
+
+        /// <summary>One animation of the shared profile: same duration and easing as everything else.</summary>
+        private static void AddSettleToIdentity(Storyboard storyboard, DependencyObject target, string property, double from, double to)
+        {
+            var animation = new DoubleAnimation
+            {
+                From = from,
+                To = to,
+                Duration = new Duration(TimeSpan.FromMilliseconds(SlideMilliseconds)),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                EnableDependentAnimation = true,
+            };
+
+            Storyboard.SetTarget(animation, target);
+            Storyboard.SetTargetProperty(animation, property);
+            storyboard.Children.Add(animation);
         }
 
         private void StageItems_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
@@ -190,6 +359,8 @@ namespace Fastcull.Views
 
             // Available space comes from the host, not from the repeater: the repeater sizes to
             // its own content and centres, so its width is the photos' width, not the room.
+            if (ViewModel.IsZoomed) { UpdateZoomLayout(); return; }
+
             var availableWidth = StageHost.ActualWidth - StageHost.Padding.Left - StageHost.Padding.Right;
             var availableHeight = StageHost.ActualHeight - StageHost.Padding.Top - StageHost.Padding.Bottom
                                   - CellChromeHeight;
@@ -226,6 +397,35 @@ namespace Fastcull.Views
             }
 
             ObserveSlotItems();
+        }
+
+        /// <summary>
+        /// Zoomed layout: one photo, aspect-fit into the whole stage area.
+        ///
+        /// Everything the normal path reserves is reclaimed - the neighbours (slot count drops to
+        /// one), the host's padding, and the tick/bar/caption chrome (hidden via the item's
+        /// StageChromeVisibility). What is left is a plain "contain" fit: the photo grows until it
+        /// meets the viewport's height or its width, whichever comes first, and is never cropped.
+        ///
+        /// It re-fits the display-tier image that is already decoded and requests no decode of any
+        /// kind, so this is not PRD 1.7's 1:1 inspection.
+        /// </summary>
+        private void UpdateZoomLayout()
+        {
+            var width = StageHost.ActualWidth;
+            var height = StageHost.ActualHeight;
+            if (width <= 0 || height <= 0) return;
+
+            ViewModel.StageSlotCount = 1;
+
+            var item = ViewModel.StageItems.Count > 0 ? ViewModel.StageItems[0] : null;
+            if (item is null) return;
+
+            var sharedHeight = StageLayout.ComputeSharedHeight(
+                width, height, totalGapWidth: 0, new[] { item.EffectiveAspectRatio });
+            if (sharedHeight <= 0) return;
+
+            item.ApplyStageMetrics(sharedHeight);
         }
 
         /// <summary>
@@ -364,6 +564,15 @@ namespace Fastcull.Views
         {
             if (ViewModel.StageItems.Count == 0) { _lastWindowStart = -1; return; }
 
+            // While zoomed the stage holds a single photo, so one "slot pitch" is the whole
+            // viewport - sliding by that would read as a hard swipe across the screen rather than
+            // a step. Changing photo while zoomed simply swaps it.
+            if (ViewModel.IsZoomed)
+            {
+                _lastWindowStart = ViewModel.StageItems[0].Index;
+                return;
+            }
+
             var windowStart = ViewModel.StageItems[0].Index;
 
             // First layout, or the window did not move (which is what happens at the sequence
@@ -401,6 +610,74 @@ namespace Fastcull.Views
             _slide.Children.Add(animation);
             _slide.Completed += (_, _) => StageSlideTransform.X = 0;
             _slide.Begin();
+        }
+
+        /// <summary>
+        /// Sweeps the photo through the quarter turn just applied.
+        ///
+        /// By the time this runs the rotation state, the persisted value and the whole stage
+        /// layout have already changed - the bound transform is at the settled angle and the
+        /// frame is already the new shape. So the animation runs on a SECOND rotation composed
+        /// on top: it starts at the opposite of the turn, which cancels the settled angle back to
+        /// where the photo visually was, and settles at zero. Exactly the shape of the navigation
+        /// slide, and it shares that animation's duration and easing.
+        ///
+        /// Like the slide it retargets rather than queues, so holding A or S sweeps continuously
+        /// instead of falling behind, and the accumulated delta is clamped so a long hold cannot
+        /// wind up several turns' worth of unwinding.
+        /// </summary>
+        private void OnRotationChanged(FilmstripItemViewModel item, int quarterTurns)
+        {
+            // Settle any in-flight sweep first, including one on a different photo - otherwise
+            // stopping it would leave that photo's delta transform parked off-zero.
+            if (_rotateDelta is not null)
+            {
+                _rotate?.Stop();
+                _rotateDelta.Angle = 0;
+                _rotateDelta = null;
+            }
+            _rotate = null;
+
+            var delta = FindRotationDelta(item);
+            if (delta is null) return;   // not realized - the photo still rotates, just without the sweep
+
+            var from = Math.Clamp(delta.Angle - (90.0 * quarterTurns), -180, 180);
+            delta.Angle = from;
+
+            var animation = new DoubleAnimation
+            {
+                From = from,
+                To = 0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(SlideMilliseconds)),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                EnableDependentAnimation = true,
+            };
+
+            Storyboard.SetTarget(animation, delta);
+            Storyboard.SetTargetProperty(animation, "Angle");
+
+            _rotateDelta = delta;
+            _rotate = new Storyboard();
+            _rotate.Children.Add(animation);
+            _rotate.Completed += (_, _) => { delta.Angle = 0; _rotateDelta = null; };
+            _rotate.Begin();
+        }
+
+        /// <summary>
+        /// The animated half of the staged photo's TransformGroup, or null when the item is not
+        /// realized. Resolved through the repeater's own TryGetElement and the template's named
+        /// Image rather than by walking the visual tree.
+        /// </summary>
+        private RotateTransform? FindRotationDelta(FilmstripItemViewModel item)
+        {
+            var slot = ViewModel.StageItems.IndexOf(item);
+            if (slot < 0) return null;
+
+            if (StageRepeater.TryGetElement(slot) is not FrameworkElement container) return null;
+            if (container.FindName("StagePhoto") is not Image image) return null;
+            if (image.RenderTransform is not TransformGroup group || group.Children.Count < 2) return null;
+
+            return group.Children[1] as RotateTransform;
         }
 
         /// <summary>

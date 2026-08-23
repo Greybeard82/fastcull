@@ -38,6 +38,40 @@ namespace Fastcull
             SetTitleBar(TitleBarDragRegion);
             TitleBarDragRegion.SizeChanged += (_, _) => ReserveCaptionButtonSpace();
             ReserveCaptionButtonSpace();
+
+            Filmstrip.ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+        }
+
+        private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName == nameof(ViewModels.MainViewModel.IsZoomed))
+                ApplyFullScreen(Filmstrip.ViewModel.IsZoomed);
+        }
+
+        /// <summary>
+        /// Puts the window into real fullscreen for zoom, and back afterwards.
+        ///
+        /// The FullScreen presenter is what removes the system chrome and lets the taskbar
+        /// auto-hide; our own title-bar strip collapses separately via its binding, because it is
+        /// drawn by the app rather than the system. Returning to the Default (overlapped)
+        /// presenter restores the window's previous size and position - the presenter remembers
+        /// them, so nothing needs saving here.
+        /// </summary>
+        private void ApplyFullScreen(bool fullScreen)
+        {
+            try
+            {
+                TitleBarDragRegion.Visibility = fullScreen ? Visibility.Collapsed : Visibility.Visible;
+
+                AppWindow.SetPresenter(fullScreen
+                    ? AppWindowPresenterKind.FullScreen
+                    : AppWindowPresenterKind.Default);
+            }
+            catch (Exception ex)
+            {
+                // A presenter change is cosmetic; never let it take the app down mid-cull.
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Presenter change failed: {ex}");
+            }
         }
 
         /// <summary>

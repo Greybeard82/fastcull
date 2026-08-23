@@ -28,11 +28,29 @@ namespace Fastcull.Services
         internal const uint ThumbnailLongEdge = 160;
         internal const uint DisplayLongEdge = 960;
 
+        /// <summary>
+        /// Ceiling on a zoom-tier request. The zoom tier is sized to the viewport, and a viewport
+        /// is not usually enormous - but this stops an absurd window size (or a bug) asking for a
+        /// decode far larger than any screen, which is the same class of hazard PRD 3.3's
+        /// dimension guard exists for. Note the decode never upscales: asking for more than the
+        /// file holds simply yields the file's own resolution.
+        /// </summary>
+        internal const uint MaxZoomLongEdge = 8192;
+
         public static Task<SoftwareBitmap?> DecodeThumbnailAsync(string filePath, CancellationToken cancellationToken = default)
             => DecodeScaledAsync(filePath, ThumbnailLongEdge, cancellationToken);
 
         public static Task<SoftwareBitmap?> DecodeDisplayImageAsync(string filePath, CancellationToken cancellationToken = default)
             => DecodeScaledAsync(filePath, DisplayLongEdge, cancellationToken);
+
+        /// <summary>
+        /// Zoom tier: sized to the viewport rather than to a filmstrip slot. The display tier is
+        /// ~960px because it only ever fills about a third of the stage; stretching that across a
+        /// whole screen is visibly soft, which is what this exists to fix.
+        /// </summary>
+        public static Task<SoftwareBitmap?> DecodeZoomImageAsync(
+            string filePath, uint longEdge, CancellationToken cancellationToken = default)
+            => DecodeScaledAsync(filePath, Math.Clamp(longEdge, DisplayLongEdge, MaxZoomLongEdge), cancellationToken);
 
         private static async Task<SoftwareBitmap?> DecodeScaledAsync(string filePath, uint longEdge, CancellationToken cancellationToken)
         {

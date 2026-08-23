@@ -53,8 +53,14 @@
                  adds no non-black pixels over the stage (PRD 1.10). -->
             <Grid x:Name="StageSlide" HorizontalAlignment="Center" VerticalAlignment="Center"
                   RenderTransformOrigin="0.5,0.5">
+                <!-- Scale carries the zoom, translate carries the navigation slide. Both settle
+                     at identity, and RenderTransformOrigin above puts the scale's centre at the
+                     stage's centre. -->
                 <Grid.RenderTransform>
-                    <TranslateTransform x:Name="StageSlideTransform"/>
+                    <TransformGroup>
+                        <ScaleTransform x:Name="StageZoomTransform"/>
+                        <TranslateTransform x:Name="StageSlideTransform"/>
+                    </TransformGroup>
                 </Grid.RenderTransform>
 
                 <ItemsRepeater x:Name="StageRepeater" ItemsSource="{x:Bind ViewModel.StageItems}"
@@ -73,6 +79,7 @@
                                 <Border Height="2" CornerRadius="1" Margin="0,0,0,2"
                                         HorizontalAlignment="Center"
                                         Width="{x:Bind StageTickWidth, Mode=OneWay}"
+                                        Visibility="{x:Bind StageChromeVisibility, Mode=OneWay}"
                                         Background="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource AccentIfActive}}"/>
 
                                 <!-- Frame is the POST-rotation layout box; the Image inside is
@@ -80,18 +87,30 @@
                                      sits in a Canvas because every other panel clamps a child's
                                      DesiredSize to the space available, which crushes the swapped
                                      dimension on a quarter turn. -->
-                                <Grid Width="{x:Bind StageFrameWidth, Mode=OneWay}"
+                                <Grid x:Name="StageFrame"
+                                      Width="{x:Bind StageFrameWidth, Mode=OneWay}"
                                       Height="{x:Bind StageFrameHeight, Mode=OneWay}">
                                     <Canvas>
-                                        <Image Stretch="Uniform"
-                                               Source="{x:Bind DisplayImage, Mode=OneWay}"
+                                        <Image x:Name="StagePhoto" Stretch="Uniform"
+                                               Source="{x:Bind StageImageSource, Mode=OneWay}"
                                                Width="{x:Bind StageImageWidth, Mode=OneWay}"
                                                Height="{x:Bind StageImageHeight, Mode=OneWay}"
                                                Canvas.Left="{x:Bind StageImageLeft, Mode=OneWay}"
                                                Canvas.Top="{x:Bind StageImageTop, Mode=OneWay}"
                                                RenderTransformOrigin="0.5,0.5">
+                                            <!-- Two rotations about the same centre, so they
+                                                 simply add. The first is the settled angle and
+                                                 changes instantly with the state; the second is
+                                                 the animated delta, which starts at the opposite
+                                                 of the turn just taken and sweeps to zero. Net
+                                                 effect: the photo appears to turn from where it
+                                                 was to where it already is. Same shape as the
+                                                 navigation slide, which also settles at zero. -->
                                             <Image.RenderTransform>
-                                                <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
+                                                <TransformGroup>
+                                                    <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
+                                                    <RotateTransform/>
+                                                </TransformGroup>
                                             </Image.RenderTransform>
                                         </Image>
                                     </Canvas>
@@ -99,12 +118,26 @@
                                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                                Foreground="{StaticResource RejectBrush}"
                                                Visibility="{x:Bind DisplayImageFailedVisibility, Mode=OneWay}"/>
+
+                                    <!-- Rating indicators, drawn ON the photo so they are present
+                                         in the stage, while zoomed, and (scaled down) on the
+                                         thumbnails. Transparent when unflagged, so an unrated
+                                         photo carries no mark at all. -->
+                                    <Border Height="6" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+                                            Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource ThumbMark}}"/>
+
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            Margin="0,0,10,14" CornerRadius="4" Padding="8,1"
+                                            Background="#B0000000"
+                                            Visibility="{x:Bind IsStarBadgeVisible, Mode=OneWay}">
+                                        <TextBlock Text="{x:Bind StarBadgeText, Mode=OneWay}"
+                                                   FontSize="18" FontWeight="SemiBold" Foreground="White"/>
+                                    </Border>
                                 </Grid>
 
-                                <!-- State weight bar: the photo's full rendered width. -->
-                                <Border Height="3" CornerRadius="2" HorizontalAlignment="Center"
-                                        Width="{x:Bind StageBarWidth, Mode=OneWay}"
-                                        Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
+                                <!-- The Chromeless weight bar that used to sit here, below the
+                                     photo, is gone: the flag bar now renders on the photo itself
+                                     and two bars an inch apart read as a mistake. -->
 
                                 <!-- Caption row. Its height is FIXED and identical in every slot:
                                      the rotate buttons are taller than the 10px caption text, so
@@ -114,16 +147,14 @@
                                      must match StageCaptionHeight here or the shared-height
                                      computation works from a stale number. -->
                                 <Grid HorizontalAlignment="Stretch"
-                                      Height="{StaticResource StageCaptionHeight}">
+                                      Height="{StaticResource StageCaptionHeight}"
+                                      Visibility="{x:Bind StageChromeVisibility, Mode=OneWay}">
                                     <StackPanel Orientation="Horizontal" Spacing="8"
                                                 HorizontalAlignment="Center" VerticalAlignment="Center">
                                         <TextBlock Text="{x:Bind DisplayName, Mode=OneWay}"
                                                    FontSize="10" CharacterSpacing="140"
                                                    TextTrimming="CharacterEllipsis"
                                                    Foreground="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource CaptionBrush}}"/>
-                                        <TextBlock Text="{x:Bind StarString, Mode=OneWay}"
-                                                   FontSize="9" CharacterSpacing="140"
-                                                   Foreground="{StaticResource Accent400Brush}"/>
                                     </StackPanel>
 
                                     <!-- Rotate controls (PRD 1.11). They render in the ACTIVE
@@ -154,7 +185,8 @@
              (PRD 2.4): it never sees arrow keys, and scrolling here never moves the
              stage selection. Only a click does. -->
         <Grid Grid.Row="1" Height="108" Background="{StaticResource FilmstripBandBrush}"
-              BorderThickness="0,1,0,0" BorderBrush="{StaticResource Neutral900Brush}">
+              BorderThickness="0,1,0,0" BorderBrush="{StaticResource Neutral900Brush}"
+              Visibility="{x:Bind ViewModel.IsZoomed, Mode=OneWay, Converter={StaticResource HiddenIfZoomed}}">
 
             <ScrollViewer x:Name="BottomScroll" Padding="0,8"
                           HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Hidden"
@@ -201,12 +233,22 @@
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    Foreground="{StaticResource RejectBrush}"
                                                    Visibility="{x:Bind ThumbnailFailedVisibility, Mode=OneWay}"/>
+
+                                        <!-- Same two indicators as the stage, scaled to a 150px
+                                             slot: a 3px bar rather than 6, and a 10px badge that
+                                             stays legible without dominating the thumbnail. -->
+                                        <Border Height="3" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+                                                Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource ThumbMark}}"/>
+
+                                        <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                Margin="0,0,4,6" CornerRadius="3" Padding="4,0"
+                                                Background="#B0000000"
+                                                Visibility="{x:Bind IsStarBadgeVisible, Mode=OneWay}">
+                                            <TextBlock Text="{x:Bind StarBadgeText, Mode=OneWay}"
+                                                       FontSize="10" FontWeight="SemiBold" Foreground="White"/>
+                                        </Border>
                                     </Grid>
                                 </Border>
-                                <!-- The state mark sits below the thumbnail, flush to its own
-                                     bottom edge, so it is never clipped by the row. -->
-                                <Border Height="2" CornerRadius="1" Margin="0,4,0,0"
-                                        Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource ThumbMark}}"/>
                             </StackPanel>
                         </DataTemplate>
                     </ItemsRepeater.ItemTemplate>

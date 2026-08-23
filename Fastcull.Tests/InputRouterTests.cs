@@ -1,4 +1,4 @@
-using Fastcull.Input;
+﻿using Fastcull.Input;
 using Windows.System;
 using Xunit;
 
@@ -113,31 +113,51 @@ public class InputRouterTests
     [Theory]
     [InlineData(VirtualKey.C, AppCommand.SetPicked)]
     [InlineData(VirtualKey.Z, AppCommand.SetRejected)]
-    [InlineData(VirtualKey.X, AppCommand.SetUnflagged)]
+    [InlineData(VirtualKey.X, AppCommand.SetRejected)]
     public void FlagLetterKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
     {
         Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
         Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
     }
 
-    [Fact]
-    public void X_IsUnflagged_NotRejected_AfterTheRemap()
+    [Theory]
+    [InlineData(VirtualKey.P, AppCommand.SetPicked)]
+    [InlineData(VirtualKey.U, AppCommand.SetUnflagged)]
+    public void P_And_U_AreMappedAgain(VirtualKey key, AppCommand expected)
     {
-        // X was reassigned rather than removed: it used to mean Rejected. A stale duplicate
-        // mapping here would silently reject photos the user meant to clear.
-        Assert.Equal(AppCommand.SetUnflagged, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
-        Assert.NotEqual(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
+        // This reverses PRD 2.1, which unmapped both outright ("not retained as aliases") and
+        // had a test asserting they resolved to None. Restored 2026-08-23 by explicit
+        // instruction. Recorded rather than quietly changed - the previous state was a decision.
+        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
+        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
     }
 
-    [Theory]
-    [InlineData(VirtualKey.P)]
-    [InlineData(VirtualKey.U)]
-    public void OldFlagKeys_AreNowFullyUnmapped(VirtualKey key)
+    [Fact]
+    public void X_IsRejected_Again_And_U_IsWhatClears()
     {
-        // P and U are not retained as aliases (PRD 2.1). Asserted explicitly rather than
-        // just deleted from the old theory - a removed test proves nothing.
-        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: true).Command);
-        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: false).Command);
+        // X previously meant Unflagged - it had been reassigned away from Rejected, guarded by a
+        // test asserting it was NOT Rejected. That reassignment is now itself reversed: X rejects
+        // and U is what clears to unrated.
+        Assert.Equal(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
+        Assert.Equal(AppCommand.SetUnflagged, InputRouter.Resolve(VirtualKey.U, isExtendedKey: false).Command);
+    }
+
+    [Fact]
+    public void ArrowUpAndDown_StepTheLadder_WhileTheFlagKeysSetDirectly()
+    {
+        // Two different rating gestures coexist: the arrows walk the PRD 1.6 ladder one position
+        // at a time, while P/X/U jump straight to a flag. Asserted together because they were
+        // briefly collapsed into one - Up/Down set flags directly - and that made states 3-7
+        // (Picked with 1-5 stars) unreachable from the keyboard.
+        Assert.Equal(AppCommand.LadderUp, InputRouter.Resolve(VirtualKey.Up, isExtendedKey: true).Command);
+        Assert.Equal(AppCommand.LadderDown, InputRouter.Resolve(VirtualKey.Down, isExtendedKey: true).Command);
+
+        Assert.Equal(AppCommand.SetPicked, InputRouter.Resolve(VirtualKey.P, isExtendedKey: false).Command);
+        Assert.Equal(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
+        Assert.Equal(AppCommand.SetUnflagged, InputRouter.Resolve(VirtualKey.U, isExtendedKey: false).Command);
+
+        // The NumLock split still holds: a non-extended Down is numpad 2, not a ladder step.
+        Assert.Equal(AppCommand.SetStars, InputRouter.Resolve(VirtualKey.Down, isExtendedKey: false).Command);
     }
 
     [Fact]
@@ -160,8 +180,8 @@ public class InputRouterTests
     // ---- Rotation (PRD 1.11) ----
 
     [Theory]
-    [InlineData(VirtualKey.A, AppCommand.RotateRight)]
-    [InlineData(VirtualKey.S, AppCommand.RotateLeft)]
+    [InlineData(VirtualKey.A, AppCommand.RotateLeft)]
+    [InlineData(VirtualKey.S, AppCommand.RotateRight)]
     public void RotationKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
     {
         // Letter keys, so the NumLock/extended split must never shadow them.
@@ -170,13 +190,16 @@ public class InputRouterTests
     }
 
     [Fact]
-    public void A_IsClockwise_And_S_IsCounterClockwise_DeliberatelyNotSwapped()
+    public void A_TurnsLeft_And_S_TurnsRight()
     {
-        // A sits physically LEFT of S on the keyboard while meaning rotate RIGHT. That is the
-        // specified mapping, not a transposition. Asserted explicitly so a future reader who
-        // "fixes" it has to delete a test that says not to.
-        Assert.Equal(AppCommand.RotateRight, InputRouter.Resolve(VirtualKey.A, isExtendedKey: false).Command);
-        Assert.Equal(AppCommand.RotateLeft, InputRouter.Resolve(VirtualKey.S, isExtendedKey: false).Command);
+        // The keys run the way the photo does: A is left of S and turns the photo left.
+        //
+        // This reverses the original mapping, which had A meaning clockwise. That was specified
+        // deliberately and guarded by a test saying not to swap it - and it still turned out
+        // backwards in the hand, so it was reversed on 2026-08-23. Recorded here rather than
+        // quietly changed, because the previous direction was an explicit decision too.
+        Assert.Equal(AppCommand.RotateLeft, InputRouter.Resolve(VirtualKey.A, isExtendedKey: false).Command);
+        Assert.Equal(AppCommand.RotateRight, InputRouter.Resolve(VirtualKey.S, isExtendedKey: false).Command);
     }
 
     [Fact]
@@ -208,13 +231,47 @@ public class InputRouterTests
                     InputRouter.Resolve(r, isExtendedKey: false).Command);
     }
 
+    // ---- Zoom ----
+
+    [Theory]
+    [InlineData(VirtualKey.Space, AppCommand.ToggleZoom)]
+    [InlineData(VirtualKey.Escape, AppCommand.ExitZoom)]
+    public void ZoomKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
+    {
+        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
+        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
+    }
+
+    [Fact]
+    public void EscapeOnlyExits_ItNeverToggles()
+    {
+        // Escape must be safe to press when already un-zoomed, so it is a distinct command
+        // rather than a second toggle - otherwise it would zoom IN from the un-zoomed state.
+        Assert.Equal(AppCommand.ExitZoom, InputRouter.Resolve(VirtualKey.Escape, isExtendedKey: false).Command);
+        Assert.NotEqual(AppCommand.ToggleZoom, InputRouter.Resolve(VirtualKey.Escape, isExtendedKey: false).Command);
+    }
+
+    [Fact]
+    public void ZoomKeys_DoNotCollideWithRatingRotationOrNavigation()
+    {
+        foreach (var key in new[] { VirtualKey.Space, VirtualKey.Escape })
+        {
+            var resolved = InputRouter.Resolve(key, isExtendedKey: false);
+
+            Assert.Equal(0, resolved.Payload);
+            Assert.NotEqual(AppCommand.SetStars, resolved.Command);
+            Assert.NotEqual(AppCommand.RotateLeft, resolved.Command);
+            Assert.NotEqual(AppCommand.RotateRight, resolved.Command);
+            Assert.NotEqual(AppCommand.NavigateNext, resolved.Command);
+            Assert.NotEqual(AppCommand.NavigatePrevious, resolved.Command);
+        }
+    }
+
     // ---- Everything else is None ----
 
     [Theory]
     [InlineData(VirtualKey.Q)]
-    [InlineData(VirtualKey.Space)]
     [InlineData(VirtualKey.Enter)]
-    [InlineData(VirtualKey.Escape)]
     [InlineData(VirtualKey.Tab)]
     [InlineData(VirtualKey.Delete)]
     [InlineData(VirtualKey.F1)]

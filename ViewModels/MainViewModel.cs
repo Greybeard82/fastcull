@@ -56,6 +56,32 @@ namespace Fastcull.ViewModels
         [ObservableProperty]
         private FilmstripItemViewModel? _activeItem;
 
+        private bool _isZoomed;
+
+        /// <summary>
+        /// Whether the active photo fills the stage on its own, with its neighbours hidden.
+        ///
+        /// A deliberately simple first pass: it re-fits the display-tier image that is already
+        /// decoded, and adds no decode of any kind. It is NOT the 1:1 inspection of PRD 1.7 -
+        /// there is no full-resolution decode, no Tier A/B distinction, no panning and no HUD.
+        ///
+        /// The flag is mirrored onto the items because the stage is a templated repeater bound to
+        /// the item type, so the template can only see per-item properties.
+        /// </summary>
+        public bool IsZoomed
+        {
+            get => _isZoomed;
+            set
+            {
+                if (_isZoomed == value) return;
+                _isZoomed = value;
+
+                foreach (var item in Items) item.IsZoomed = value;
+
+                OnPropertyChanged(nameof(IsZoomed));
+            }
+        }
+
         private SessionStore? _sessionStore;
 
         public async Task LoadAsync()
@@ -207,14 +233,17 @@ namespace Fastcull.ViewModels
 
                 case AppCommand.RotateRight: RotateActiveRight(); break;
                 case AppCommand.RotateLeft: RotateActiveLeft(); break;
+
+                case AppCommand.ToggleZoom: IsZoomed = !IsZoomed; break;
+                case AppCommand.ExitZoom: IsZoomed = false; break;
             }
         }
 
         /// <summary>Rotates the active photo 90 degrees clockwise (PRD 1.11).</summary>
-        public void RotateActiveRight() => ApplyRotation(r => r.RotateRight());
+        public void RotateActiveRight() => ApplyRotation(r => r.RotateRight(), quarterTurns: 1);
 
         /// <summary>Rotates the active photo 90 degrees counter-clockwise (PRD 1.11).</summary>
-        public void RotateActiveLeft() => ApplyRotation(r => r.RotateLeft());
+        public void RotateActiveLeft() => ApplyRotation(r => r.RotateLeft(), quarterTurns: -1);
 
         /// <summary>
         /// Applies a quarter turn to the active item only. Synchronous and awaits nothing, so the
@@ -224,7 +253,7 @@ namespace Fastcull.ViewModels
         /// Rotation moves no cursor and changes no rating, exactly as ApplyRating changes no
         /// cursor and no rotation. The two are entirely independent axes.
         /// </summary>
-        private void ApplyRotation(Func<Rotation, Rotation> transition)
+        private void ApplyRotation(Func<Rotation, Rotation> transition, int quarterTurns)
         {
             var item = ActiveItem;
             if (item is null) return;
@@ -238,11 +267,18 @@ namespace Fastcull.ViewModels
             // never an awaited database call on the UI thread.
             _sessionStore?.QueueRotation(item.Photo.FilePath, updated);
 
-            RotationChanged?.Invoke(item);
+            RotationChanged?.Invoke(item, quarterTurns);
         }
 
-        /// <summary>Raised after the active item's Rotation changes.</summary>
-        public event Action<FilmstripItemViewModel>? RotationChanged;
+        /// <summary>
+        /// Raised after the active item's Rotation changes, with the signed quarter turns just
+        /// applied (+1 clockwise, -1 counter-clockwise).
+        ///
+        /// The direction has to be carried rather than derived from the before/after angles: a
+        /// turn from 270 to 0 is +1 quarter turn, but the angles differ by -270, and animating
+        /// that difference would spin the photo three-quarters of the way backwards.
+        /// </summary>
+        public event Action<FilmstripItemViewModel, int>? RotationChanged;
 
         /// <summary>
         /// Applies a ladder transition to the active item only. Synchronous and awaits nothing,

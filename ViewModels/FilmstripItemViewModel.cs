@@ -84,6 +84,22 @@ namespace Fastcull.ViewModels
         /// <summary>Clockwise render angle in degrees.</summary>
         public double RotationAngle => Rotation.Degrees;
 
+        /// <summary>
+        /// Mirrored from MainViewModel.IsZoomed. The stage is a templated repeater bound to this
+        /// type, so a template can only see per-item properties - a global flag has to be pushed
+        /// down to be visible to the markup.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(StageChromeVisibility))]
+        private bool _isZoomed;
+
+        /// <summary>
+        /// The accent tick, weight bar and caption row are hidden while zoomed, so the photo gets
+        /// the whole stage. State is still readable from the item's mark in the bottom filmstrip,
+        /// which stays visible.
+        /// </summary>
+        public Visibility StageChromeVisibility => IsZoomed ? Visibility.Collapsed : Visibility.Visible;
+
         // ------------------------------------------------------------------
         // Stage geometry
         // ------------------------------------------------------------------
@@ -223,11 +239,97 @@ namespace Fastcull.ViewModels
         /// <summary>Larger "display tier" decode for the top three-slot comparison view - a
         /// separate decode from Thumbnail, never the same bitmap, per PRD 3.2.</summary>
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(StageImageSource))]
         private ImageSource? _displayImage;
 
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(DisplayImageFailedVisibility))]
         private bool _displayImageFailed;
+
+        /// <summary>
+        /// Zoom-tier decode, sized to the viewport. Null until one has been requested and has
+        /// landed - and null again the moment zoom exits or the zoomed photo changes, so a
+        /// viewport-sized bitmap never lingers behind the stage's existing retention problem.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(StageImageSource))]
+        private ImageSource? _zoomImage;
+
+        /// <summary>
+        /// What the stage actually draws: the zoom-tier image once it exists, the display tier
+        /// until then. The Prime Directive's "never a blank frame" is why this falls back rather
+        /// than waiting - the softer image is on screen from the first frame of the zoom, and the
+        /// sharp one replaces it in place when it is ready.
+        /// </summary>
+        public ImageSource? StageImageSource => ZoomImage ?? DisplayImage;
+
+        private CancellationTokenSource? _zoomCts;
+
+        /// <summary>
+        /// Decodes this photo at <paramref name="longEdge"/> for zoom, then swaps it in.
+        ///
+        /// Follows the rules established after the 0xC000027B stowed-exception crash: the WinRT
+        /// calls are awaited to completion rather than raced against a token, cancellation is
+        /// observed between stages, and the UI assignment is marshalled onto the dispatcher.
+        ///
+        /// RAW is excluded on instruction. Note that RAW does NOT go blank when zoomed - it keeps
+        /// showing its display-tier image, which comes from the embedded JPEG preview; it simply
+        /// does not get the sharper re-decode.
+        /// </summary>
+        public async Task LoadZoomImageAsync(uint longEdge)
+        {
+            if (Photo.Family is not (FormatFamily.Jpeg or FormatFamily.Png)) return;
+
+            ReleaseZoomImage();
+
+            var cts = new CancellationTokenSource();
+            _zoomCts = cts;
+
+            try
+            {
+                var bitmap = await ThumbnailService
+                    .DecodeZoomImageAsync(Photo.FilePath, longEdge, cts.Token)
+                    .ConfigureAwait(false);
+
+                if (bitmap is null || cts.IsCancellationRequested) return;
+
+                var source = new SoftwareBitmapSource();
+                await source.SetBitmapAsync(bitmap);
+
+                if (cts.IsCancellationRequested) return;
+
+                _dispatcherQueue.TryEnqueue(() =>
+                {
+                    try { if (!cts.IsCancellationRequested) ZoomImage = source; } catch { }
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                // Zoom exited or the photo changed before the decode landed - not a failure.
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Zoom decode failed: {ex}");
+            }
+        }
+
+        /// <summary>
+        /// Drops the zoom-tier image and cancels any decode still in flight.
+        ///
+        /// The reference is released rather than Disposed on purpose. Disposing the underlying
+        /// SoftwareBitmap after SetBitmapAsync is exactly what fail-fasted the process with
+        /// 0xC000027B before - XAML copies those pixels into a composition surface on its own
+        /// worker thread, and destroying the bitmap out from under that copy is fatal. Dropping
+        /// the last reference is what makes it collectable, and is the safe equivalent here.
+        /// </summary>
+        public void ReleaseZoomImage()
+        {
+            _zoomCts?.Cancel();
+            _zoomCts?.Dispose();
+            _zoomCts = null;
+
+            ZoomImage = null;
+        }
 
         /// <summary>
         /// Exposed as a Visibility so the top slots can bind it through a nested path
@@ -245,6 +347,7 @@ namespace Fastcull.ViewModels
         {
             _loadCts.Cancel();
             _loadCts.Dispose();
+            ReleaseZoomImage();
         }
 
         /// <summary>

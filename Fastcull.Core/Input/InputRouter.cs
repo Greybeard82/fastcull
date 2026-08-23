@@ -18,6 +18,8 @@ namespace Fastcull.Input
         SetUnflagged,
         RotateRight,     // 90 degrees clockwise
         RotateLeft,      // 90 degrees counter-clockwise
+        ToggleZoom,
+        ExitZoom,
     }
 
     public readonly record struct ResolvedInput(AppCommand Command, int Payload)
@@ -61,12 +63,24 @@ namespace Fastcull.Input
                 // Rejected and now means Unflagged. P and U are deliberately unmapped.
                 case VirtualKey.C: return new ResolvedInput(AppCommand.SetPicked, 0);
                 case VirtualKey.Z: return new ResolvedInput(AppCommand.SetRejected, 0);
-                case VirtualKey.X: return new ResolvedInput(AppCommand.SetUnflagged, 0);
-                // Rotation (PRD 1.11). A turns clockwise and S turns counter-clockwise - A is
-                // physically left of S while meaning "right", which is deliberate and specified,
-                // not a transposition to be helpfully corrected.
-                case VirtualKey.A: return new ResolvedInput(AppCommand.RotateRight, 0);
-                case VirtualKey.S: return new ResolvedInput(AppCommand.RotateLeft, 0);
+                // P/X/U flag keys, restored 2026-08-23 by explicit instruction. Note this
+                // REVERSES two earlier decisions: PRD 2.1 had unmapped P and U outright, and had
+                // reassigned X from Rejected to Unflagged. X is Rejected again, and U is what
+                // clears to unrated.
+                case VirtualKey.P: return new ResolvedInput(AppCommand.SetPicked, 0);
+                case VirtualKey.X: return new ResolvedInput(AppCommand.SetRejected, 0);
+                case VirtualKey.U: return new ResolvedInput(AppCommand.SetUnflagged, 0);
+                // Rotation (PRD 1.11). A turns counter-clockwise and S turns clockwise, so the
+                // keys run the way the photo does: A is left of S, and turns the photo left.
+                // (This is a deliberate reversal of the original mapping, made 2026-08-23 after
+                // the first one proved wrong in the hand.)
+                case VirtualKey.A: return new ResolvedInput(AppCommand.RotateLeft, 0);
+                case VirtualKey.S: return new ResolvedInput(AppCommand.RotateRight, 0);
+                // Zoom (PRD 2.1/2.2). Space toggles; Escape only ever exits, so it is safe to
+                // press when already un-zoomed. Neither is a numpad key, so the extended-key
+                // split below cannot shadow them.
+                case VirtualKey.Space: return new ResolvedInput(AppCommand.ToggleZoom, 0);
+                case VirtualKey.Escape: return new ResolvedInput(AppCommand.ExitZoom, 0);
             }
 
             return isExtendedKey ? ResolveExtended(key) : ResolveNumpad(key);
@@ -77,6 +91,9 @@ namespace Fastcull.Input
         {
             VirtualKey.Left => new ResolvedInput(AppCommand.NavigatePrevious, 0),
             VirtualKey.Right => new ResolvedInput(AppCommand.NavigateNext, 0),
+            // Up/Down step the PRD 1.6 ladder one position, clamped at both ends. They briefly
+            // set flags directly instead; reverted 2026-08-23 so the ladder is reachable from the
+            // keyboard again. P/X/U and the digits stay direct-set - only these two step.
             VirtualKey.Up => new ResolvedInput(AppCommand.LadderUp, 0),
             VirtualKey.Down => new ResolvedInput(AppCommand.LadderDown, 0),
             VirtualKey.Home => new ResolvedInput(AppCommand.NavigateFirst, 0),

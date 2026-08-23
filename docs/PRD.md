@@ -185,7 +185,8 @@ Controls are held to the same rule in **every visual state**, not just at rest. 
 
 A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied to the **selected** photo.
 
-- `A` turns 90° **clockwise**; `S` turns 90° **counter-clockwise**. Both wrap: four turns in either direction return the photo to where it started. Note that `A` sits physically left of `S` while meaning "right" — this is deliberate.
+- `A` turns 90° **counter-clockwise**; `S` turns 90° **clockwise**. The keys run the way the photo does — `A` is left of `S` and turns the photo left. Both wrap: four turns in either direction return the photo to where it started.
+- The turn is **animated**, using the same duration and easing as the navigation transition (§2.5). It is decoration on the same terms: the rotation state, the persisted value and the stage layout all change immediately, and nothing waits for the sweep.
 - Two small buttons in the caption row, right-aligned, do the same thing. They render in the **active** slot — wherever that is, which at the first and last photo of the sequence is an end slot rather than the centre (§1.5). Exactly one slot shows them at a time, and they act on the active photo.
 - **Rotation is a delta on top of whatever orientation the decode produced, never an absolute orientation of the final image.** The decoded baseline is not uniform across formats today — WIC applies EXIF orientation for JPEG and friends but not for RAW (see §7) — so a delta is the only thing that means the same in both cases. Note the corollary: if the RAW baseline is fixed later, a delta stored against the *old* baseline for an affected file becomes wrong. See §7 for the bounded set that applies to.
 - **It is a display transform and never a re-decode.** Re-decoding would spend a decode on a transform, blow the §3.5 keypress budget, and invalidate cache entries once §3.3 exists.
@@ -209,8 +210,8 @@ A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied 
 | `C` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
 | `Z` | Set `Rejected` — ladder index 0, clears stars |
 | `X` | Set `Unrated` (`Unflagged`) — ladder index 1, clears stars |
-| `A` | Rotate the selected photo 90° **clockwise** (§1.11) |
-| `S` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
+| `A` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
+| `S` | Rotate the selected photo 90° **clockwise** (§1.11) |
 | `Home` / `End` | First / last photo |
 | `Space` | Enter zoom mode |
 | `I` | Toggle metadata HUD |
@@ -239,6 +240,10 @@ Input routing is an explicit two-state machine, handled in one place at window l
 ### 2.3 Key Repeat
 Holding `Right` must not queue 40 navigation events that replay after release. Navigation input is coalesced: the cursor moves at a fixed maximum rate (suggest 15 per second) and the decode pipeline targets only the settled position, not every intermediate index.
 
+### 2.4 Keyboard ownership
+
+Arrow keys are owned exclusively by the top stage region. They navigate and rate. They must **never** scroll the bottom filmstrip, move XY-focus, or be consumed by any child control. The bottom filmstrip is mouse-only: click, drag and wheel.
+
 ### 2.5 Navigation transition
 
 Moving between photos animates rather than snapping, in both regions: the stage slides by one slot pitch, and the bottom filmstrip scrolls to re-centre the active thumbnail. Duration is short enough not to sit between the user and the next photo — currently **110 ms**, eased out — and is a single named value so it can be tuned in one place.
@@ -251,9 +256,30 @@ Three properties are behavioural contract, not styling:
 
 The bottom filmstrip must keep the active thumbnail in view on **every** navigation, whatever its source — keyboard, a stage click, or a thumbnail click.
 
-### 2.4 Keyboard ownership
+### 2.6 Manual rotation
 
-Arrow keys are owned exclusively by the top three-slot region. They navigate and rate. They must **never** scroll the bottom filmstrip, move XY-focus, or be consumed by any child control. The bottom filmstrip is mouse-only: click, drag and wheel.
+Added outside the original specification. The model — quarter turns, wrapping, stored as a delta, display-transform-only, persisted — is §1.11; this section covers only how it is driven.
+
+**Scope: filmstrip mode.** Zoom mode does not exist, so there is no second mode for these keys to mean something else in. See the collision warning at the end of this section before building one.
+
+| Input | Action |
+| :--- | :--- |
+| `A` | Rotate the active photo 90° **counter-clockwise** |
+| `S` | Rotate the active photo 90° **clockwise** |
+| On-screen **↺** button | Rotate the active photo 90° counter-clockwise |
+| On-screen **↻** button | Rotate the active photo 90° clockwise |
+
+The keys run the way the photo does: `A` is left of `S` and turns the photo left.
+
+**The buttons are exactly equivalent to the keys** — same two actions, same target, no separate code path. They render in the caption row of the **active** slot, wherever that is, which at the first and last photo of the sequence is an end slot rather than the centre (§1.5). Exactly one slot shows them at a time. Clicking one must not move the selection or alter the cull state, and must not take keyboard focus.
+
+**The turn is animated**, sharing the navigation transition's easing profile (§2.5) so the two motions read as the same system: **110 ms, cubic ease-out**, driven from the same single named duration — retuning §2.5 retunes this. It is decoration on the same terms as §2.5's first contract: the rotation state, the persisted value and the stage layout all change immediately, and nothing waits for the sweep. Repeated turns retarget the in-flight sweep rather than queueing, so holding `A` or `S` turns continuously instead of falling behind.
+
+> **On frame counts.** The durable specification is the duration and the easing curve, not a frame count. Sampling the *navigation slide* at ~5.5 ms intervals captured 16 distinct intermediate positions settling by ~133 ms of wall clock, and the rotation sweep behaves the same way — but both numbers are properties of the measuring rig and the display refresh rate, not targets. At 60 Hz a 110 ms animation is roughly seven displayed frames. Treat "16 frames / 130 ms" as an observation confirming the motion is smooth and fast, not as a requirement to hit.
+
+**Known limitation:** on a 90° or 270° turn the photo's aspect changes, so its layout box takes the new shape immediately while the image sweeps between the two. A rotating rectangle passes through a bounding box larger than either endpoint, so the photo briefly overflows its own frame — measured at roughly 110 ms, crossing its caption row but not reaching the neighbouring photo. Accepted as-is; closing it would mean either clipping the frame (cutting the photo mid-sweep) or scaling down through the turn.
+
+> **Collision to resolve before zoom mode is built.** §2.2 assigns `A` to *previous photo* in zoom mode. Input resolution is currently a single flat map with no mode state machine — the "explicit two-state machine" §2.2 describes was never implemented — so `A` resolves to rotate-left everywhere. When zoom mode lands, either §2.2's `A`/`D` navigation or these rotation bindings has to give, and the flat map has to become the two-state machine §2.2 already assumes.
 
 ---
 
