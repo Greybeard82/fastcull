@@ -3,14 +3,41 @@
     x:Class="Fastcull.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:Fastcull">
+    xmlns:local="using:Fastcull"
+    RequestedTheme="Dark">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
-                <!-- Other merged dictionaries here -->
             </ResourceDictionary.MergedDictionaries>
-            <!-- Other app resources here -->
+
+            <!-- PRD 1.10 (OLED black): every pixel that is not photograph content must be
+                 exactly #FF000000 so it is a fully-off pixel on an OLED panel. Near-blacks do
+                 not qualify. These overrides come after the merged XamlControlsResources so
+                 they win over the stock dark palette, which uses near-blacks and greys. -->
+            <SolidColorBrush x:Key="ApplicationPageBackgroundThemeBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="SolidBackgroundFillColorBaseBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="SolidBackgroundFillColorSecondaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="SolidBackgroundFillColorTertiaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="SolidBackgroundFillColorQuarternaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="LayerFillColorDefaultBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="LayerFillColorAltBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="CardBackgroundFillColorDefaultBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="CardBackgroundFillColorSecondaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ControlFillColorDefaultBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ControlFillColorSecondaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ControlFillColorTertiaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ControlOnImageFillColorDefaultBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ControlAltFillColorSecondaryBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ControlStrokeColorDefaultBrush" Color="#FF000000"/>
+            <SolidColorBrush x:Key="CardStrokeColorDefaultBrush" Color="#FF000000"/>
+
+            <!-- The scrollbar rides over the pure-black filmstrip; keep its bed black too. -->
+            <SolidColorBrush x:Key="ScrollBarBackground" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ScrollBarBackgroundPointerOver" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ScrollBarTrackFill" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ScrollBarTrackFillPointerOver" Color="#FF000000"/>
+            <SolidColorBrush x:Key="ScrollBarTrackStroke" Color="#FF000000"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

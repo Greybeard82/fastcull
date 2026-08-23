@@ -11,8 +11,10 @@ using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Navigation;
 using Fastcull.Input;
+using Microsoft.UI;
 using Windows.Foundation;
 using Windows.Foundation.Collections;
+using Windows.UI;
 
 // To learn more about WinUI, the WinUI project structure,
 // and more about our project templates, see: http://aka.ms/winui-project-info.
@@ -27,6 +29,33 @@ namespace Fastcull
         public MainWindow()
         {
             InitializeComponent();
+            ApplyBlackTitleBar();
+        }
+
+        /// <summary>
+        /// PRD 1.10: the caption buttons must not sit on a grey strip. Extending content into
+        /// the title bar and painting every title-bar colour black is the only way to get the
+        /// whole chrome to exactly #FF000000 - the default title bar is drawn by the system and
+        /// ignores the app's theme brushes.
+        /// </summary>
+        private void ApplyBlackTitleBar()
+        {
+            ExtendsContentIntoTitleBar = true;
+
+            var titleBar = AppWindow.TitleBar;
+            titleBar.ExtendsContentIntoTitleBar = true;
+            titleBar.BackgroundColor = Colors.Black;
+            titleBar.InactiveBackgroundColor = Colors.Black;
+            titleBar.ButtonBackgroundColor = Colors.Black;
+            titleBar.ButtonInactiveBackgroundColor = Colors.Black;
+            titleBar.ButtonHoverBackgroundColor = Color.FromArgb(0xFF, 0x30, 0x30, 0x30);
+            titleBar.ButtonPressedBackgroundColor = Color.FromArgb(0xFF, 0x50, 0x50, 0x50);
+            titleBar.ForegroundColor = Colors.White;
+            titleBar.InactiveForegroundColor = Color.FromArgb(0xFF, 0x90, 0x90, 0x90);
+            titleBar.ButtonForegroundColor = Colors.White;
+            titleBar.ButtonInactiveForegroundColor = Color.FromArgb(0xFF, 0x90, 0x90, 0x90);
+            titleBar.ButtonHoverForegroundColor = Colors.White;
+            titleBar.ButtonPressedForegroundColor = Colors.White;
         }
 
         /// <summary>

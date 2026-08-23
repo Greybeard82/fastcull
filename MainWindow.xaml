@@ -10,11 +10,10 @@
     mc:Ignorable="d"
     Title="Fastcull">
 
-    <Window.SystemBackdrop>
-        <MicaBackdrop />
-    </Window.SystemBackdrop>
+    <!-- No SystemBackdrop: Mica and Acrylic both tint with the desktop wallpaper and can never
+         be fully black, which PRD 1.10 requires. -->
 
-    <Grid x:Name="RootGrid" PreviewKeyDown="RootGrid_PreviewKeyDown">
+    <Grid x:Name="RootGrid" Background="#FF000000" PreviewKeyDown="RootGrid_PreviewKeyDown">
         <views:FilmstripView x:Name="Filmstrip"/>
     </Grid>
 </Window>
