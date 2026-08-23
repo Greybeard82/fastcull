@@ -89,6 +89,13 @@ namespace Fastcull.Services
                 var decoder = await BitmapDecoder.CreateAsync(stream).AsTask().ConfigureAwait(false);
 
                 cancellationToken.ThrowIfCancellationRequested();
+
+                // PRD 3.3's dimension guard, applied where the decode size is actually chosen.
+                // Defence in depth: the tiers above already request modest sizes, but a caller
+                // asking for a huge edge on an extreme aspect must never be able to allocate a
+                // half-gigabyte buffer here.
+                longEdge = DimensionGuard.ClampLongEdge(longEdge, decoder.PixelWidth, decoder.PixelHeight);
+
                 var scale = Math.Min(1.0, longEdge / (double)Math.Max(decoder.PixelWidth, decoder.PixelHeight));
                 var transform = new BitmapTransform
                 {

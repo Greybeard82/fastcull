@@ -133,6 +133,17 @@
                                         <TextBlock Text="{x:Bind StarBadgeText, Mode=OneWay}"
                                                    FontSize="18" FontWeight="SemiBold" Foreground="White"/>
                                     </Border>
+
+                                    <!-- PRD 3.3: say so when the dimension guard capped this
+                                         photo, rather than letting it look mysteriously soft. -->
+                                    <Border HorizontalAlignment="Left" VerticalAlignment="Top"
+                                            Margin="10,10,0,0" CornerRadius="4" Padding="8,2"
+                                            Background="#B0000000"
+                                            Visibility="{x:Bind DimensionLimitedVisibility, Mode=OneWay}">
+                                        <TextBlock Text="1:1 UNAVAILABLE — IMAGE TOO LARGE"
+                                                   FontSize="10" CharacterSpacing="120"
+                                                   Foreground="{StaticResource Neutral300Brush}"/>
+                                    </Border>
                                 </Grid>
 
                                 <!-- The Chromeless weight bar that used to sit here, below the

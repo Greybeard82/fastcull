@@ -227,6 +227,7 @@ namespace Fastcull.ViewModels
         /// </summary>
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(StageChromeVisibility))]
+        [NotifyPropertyChangedFor(nameof(DimensionLimitedVisibility))]
         private bool _isZoomed;
 
         /// <summary>
@@ -405,6 +406,18 @@ namespace Fastcull.ViewModels
         private long _zoomImageBytes;
 
         /// <summary>
+        /// True when PRD 3.3's 512 MB dimension guard reduced this photo's decode, so full
+        /// resolution is not available for it. Surfaced on the stage the same way a failed decode
+        /// is, rather than letting the photo look mysteriously soft with no explanation.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(DimensionLimitedVisibility))]
+        private bool _dimensionLimited;
+
+        public Visibility DimensionLimitedVisibility =>
+            DimensionLimited && IsZoomed ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>
         /// Decodes this photo at <paramref name="longEdge"/> for zoom, then swaps it in.
         ///
         /// Follows the rules established after the 0xC000027B stowed-exception crash: the WinRT
@@ -418,6 +431,13 @@ namespace Fastcull.ViewModels
         public async Task LoadZoomImageAsync(uint longEdge)
         {
             if (Photo.Family is not (FormatFamily.Jpeg or FormatFamily.Png or FormatFamily.Raw)) return;
+
+            // PRD 3.3's dimension guard. A photo whose decode at this size would exceed 512 MB is
+            // capped and flagged rather than attempted - one stitched panorama is enough to take
+            // the app out, and losing a 45-minute cull to an OOM is worse than a soft zoom.
+            var capped = DimensionGuard.ClampLongEdge(longEdge, EffectiveAspectRatio);
+            DimensionLimited = capped < longEdge;
+            longEdge = capped;
 
             // Cancel any in-flight decode but KEEP whatever is already on screen. This method is
             // re-entered for the same photo when the stage resizes (the fullscreen transition
