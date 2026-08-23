@@ -49,9 +49,68 @@ namespace Fastcull.ViewModels
         /// lands.
         /// </summary>
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(EffectiveAspectRatio))]
         private double _aspectRatio = 1.5;
 
+        /// <summary>Fixed slot width of a bottom-filmstrip thumbnail.</summary>
+        public const double ThumbnailSlotWidth = 150;
+
+        // The band is 108px with 8px padding top and bottom, leaving 92. The mark below each
+        // thumbnail needs 4px of gap plus its own 2px, so the tallest thumbnail can only be 86.
+        private const double ActiveThumbnailHeight = 82;
+        private const double InactiveThumbnailHeight = 70;
+
+        /// <summary>
+        /// User rotation (PRD 1.11), as quarter turns on top of whatever the decode produced.
+        /// Set only via MainViewModel, exactly like CullState.
+        /// </summary>
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(EffectiveAspectRatio))]
+        [NotifyPropertyChangedFor(nameof(RotationAngle))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageWidth))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageHeight))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageLeft))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageTop))]
+        private Rotation _rotation = Rotation.None;
+
+        /// <summary>
+        /// The aspect the photo actually presents on screen, rotation included. Everything that
+        /// lays the stage out consumes this rather than <see cref="AspectRatio"/> - a quarter
+        /// turn swaps width and height, and sizing against the un-rotated aspect makes a rotated
+        /// photo overflow its cell or leave a gap.
+        /// </summary>
+        public double EffectiveAspectRatio => Rotation.Apply(AspectRatio);
+
+        /// <summary>Clockwise render angle in degrees.</summary>
+        public double RotationAngle => Rotation.Degrees;
+
+        /// <summary>Height of this thumbnail's slot: the active one stands 12px taller.</summary>
+        public double ThumbnailSlotHeight => IsActive ? ActiveThumbnailHeight : InactiveThumbnailHeight;
+
+        /// <summary>
+        /// Pre-rotation size of the thumbnail image. At 90/270 the image is laid out with width
+        /// and height swapped so that, once rotated about its centre, its bounding box is exactly
+        /// the slot - it fills the slot without overlapping its neighbours.
+        /// </summary>
+        public double ThumbnailImageWidth => Rotation.SwapsAspect ? ThumbnailSlotHeight : ThumbnailSlotWidth;
+
+        public double ThumbnailImageHeight => Rotation.SwapsAspect ? ThumbnailSlotWidth : ThumbnailSlotHeight;
+
+        /// <summary>
+        /// Canvas offsets that centre the thumbnail image in its slot. The image sits in a Canvas
+        /// for the same reason the stage photo does: every other panel clamps a child's desired
+        /// size to the space available, which would crush the swapped dimension on a quarter turn.
+        /// </summary>
+        public double ThumbnailImageLeft => (ThumbnailSlotWidth - ThumbnailImageWidth) / 2;
+
+        public double ThumbnailImageTop => (ThumbnailSlotHeight - ThumbnailImageHeight) / 2;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(ThumbnailSlotHeight))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageWidth))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageHeight))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageLeft))]
+        [NotifyPropertyChangedFor(nameof(ThumbnailImageTop))]
         private bool _isActive;
 
         /// <summary>Position on the PRD 1.6 cull ladder. Set only via MainViewModel.</summary>

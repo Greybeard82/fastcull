@@ -27,7 +27,6 @@
         <conv:CullStateToWeightBarBrushConverter x:Key="WeightBrush"/>
         <conv:ThumbnailMarkBrushConverter x:Key="ThumbMark"/>
         <conv:BoolToThumbnailOpacityConverter x:Key="ThumbOpacity"/>
-        <conv:BoolToThumbnailHeightConverter x:Key="ThumbHeight"/>
         <conv:ItemToVisibilityConverter x:Key="ItemVisible"/>
     </UserControl.Resources>
 
@@ -48,15 +47,22 @@
                     <Border x:Name="Slot0Tick" Height="2" CornerRadius="1" Margin="0,0,0,2"
                             HorizontalAlignment="Center"
                             Background="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource TickBrush}, ConverterParameter=0}"/>
-                    <Border CornerRadius="2">
-                        <Grid>
+                    <!-- Frame is the POST-rotation layout box; the Image inside is laid out
+                         pre-rotation and turned about its centre. See ApplySlot. -->
+                    <Grid x:Name="Slot0Frame">
+                        <Canvas>
                             <Image x:Name="Slot0Image" Stretch="Uniform"
-                                   Source="{x:Bind ViewModel.Slot0Item.DisplayImage, Mode=OneWay}"/>
-                            <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{StaticResource RejectBrush}"
-                                       Visibility="{x:Bind ViewModel.Slot0Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
-                        </Grid>
-                    </Border>
+                                   RenderTransformOrigin="0.5,0.5"
+                                   Source="{x:Bind ViewModel.Slot0Item.DisplayImage, Mode=OneWay}">
+                                <Image.RenderTransform>
+                                    <RotateTransform x:Name="Slot0Rotate"/>
+                                </Image.RenderTransform>
+                            </Image>
+                        </Canvas>
+                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{StaticResource RejectBrush}"
+                                   Visibility="{x:Bind ViewModel.Slot0Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
+                    </Grid>
                     <Border x:Name="Slot0Bar" Height="3" CornerRadius="2" HorizontalAlignment="Center"
                             Background="{x:Bind ViewModel.Slot0Item.CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
                     <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
@@ -76,25 +82,49 @@
                     <Border x:Name="Slot1Tick" Height="2" CornerRadius="1" Margin="0,0,0,2"
                             HorizontalAlignment="Center"
                             Background="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource TickBrush}, ConverterParameter=1}"/>
-                    <Border CornerRadius="2">
-                        <Grid>
+                    <Grid x:Name="Slot1Frame">
+                        <Canvas>
                             <Image x:Name="Slot1Image" Stretch="Uniform"
-                                   Source="{x:Bind ViewModel.Slot1Item.DisplayImage, Mode=OneWay}"/>
-                            <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{StaticResource RejectBrush}"
-                                       Visibility="{x:Bind ViewModel.Slot1Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
-                        </Grid>
-                    </Border>
+                                   RenderTransformOrigin="0.5,0.5"
+                                   Source="{x:Bind ViewModel.Slot1Item.DisplayImage, Mode=OneWay}">
+                                <Image.RenderTransform>
+                                    <RotateTransform x:Name="Slot1Rotate"/>
+                                </Image.RenderTransform>
+                            </Image>
+                        </Canvas>
+                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{StaticResource RejectBrush}"
+                                   Visibility="{x:Bind ViewModel.Slot1Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
+                    </Grid>
                     <Border x:Name="Slot1Bar" Height="3" CornerRadius="2" HorizontalAlignment="Center"
                             Background="{x:Bind ViewModel.Slot1Item.CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
-                        <TextBlock Text="{x:Bind ViewModel.Slot1Item.DisplayName, Mode=OneWay}"
-                                   FontSize="10" CharacterSpacing="140" TextTrimming="CharacterEllipsis"
-                                   Foreground="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource CaptionBrush}, ConverterParameter=1}"/>
-                        <TextBlock Text="{x:Bind ViewModel.Slot1Item.StarString, Mode=OneWay}"
-                                   FontSize="9" CharacterSpacing="140"
-                                   Foreground="{StaticResource Accent400Brush}"/>
-                    </StackPanel>
+                    <!-- The caption row stretches to the frame width (the parent StackPanel is
+                         centred and sized by its widest child, the photo frame), so the rotate
+                         buttons land at the photo's right edge while the name stays centred. -->
+                    <Grid HorizontalAlignment="Stretch">
+                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
+                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.DisplayName, Mode=OneWay}"
+                                       FontSize="10" CharacterSpacing="140" TextTrimming="CharacterEllipsis"
+                                       Foreground="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource CaptionBrush}, ConverterParameter=1}"/>
+                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.StarString, Mode=OneWay}"
+                                       FontSize="9" CharacterSpacing="140"
+                                       Foreground="{StaticResource Accent400Brush}"/>
+                        </StackPanel>
+
+                        <!-- Rotate controls (PRD 1.11). They sit under the centre slot always,
+                             but act on the ACTIVE item - which is a different photo at the
+                             sequence boundaries, where the active marker moves to an end slot. -->
+                        <StackPanel Orientation="Horizontal" Spacing="2"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Tapped="RotateButtons_Tapped">
+                            <Button Style="{StaticResource ChromelessGlyphButtonStyle}"
+                                    Content="&#x21BA;" Click="RotateLeft_Click"
+                                    AutomationProperties.Name="Rotate left 90 degrees"/>
+                            <Button Style="{StaticResource ChromelessGlyphButtonStyle}"
+                                    Content="&#x21BB;" Click="RotateRight_Click"
+                                    AutomationProperties.Name="Rotate right 90 degrees"/>
+                        </StackPanel>
+                    </Grid>
                 </StackPanel>
 
                 <!-- Slot 2 -->
@@ -104,15 +134,20 @@
                     <Border x:Name="Slot2Tick" Height="2" CornerRadius="1" Margin="0,0,0,2"
                             HorizontalAlignment="Center"
                             Background="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource TickBrush}, ConverterParameter=2}"/>
-                    <Border CornerRadius="2">
-                        <Grid>
+                    <Grid x:Name="Slot2Frame">
+                        <Canvas>
                             <Image x:Name="Slot2Image" Stretch="Uniform"
-                                   Source="{x:Bind ViewModel.Slot2Item.DisplayImage, Mode=OneWay}"/>
-                            <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                       Foreground="{StaticResource RejectBrush}"
-                                       Visibility="{x:Bind ViewModel.Slot2Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
-                        </Grid>
-                    </Border>
+                                   RenderTransformOrigin="0.5,0.5"
+                                   Source="{x:Bind ViewModel.Slot2Item.DisplayImage, Mode=OneWay}">
+                                <Image.RenderTransform>
+                                    <RotateTransform x:Name="Slot2Rotate"/>
+                                </Image.RenderTransform>
+                            </Image>
+                        </Canvas>
+                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Foreground="{StaticResource RejectBrush}"
+                                   Visibility="{x:Bind ViewModel.Slot2Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
+                    </Grid>
                     <Border x:Name="Slot2Bar" Height="3" CornerRadius="2" HorizontalAlignment="Center"
                             Background="{x:Bind ViewModel.Slot2Item.CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
                     <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
@@ -157,10 +192,25 @@
                                         Opacity="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource ThumbOpacity}}">
                                 <!-- UniformToFill + a corner-radius Border reproduces the
                                      handoff's background-size: cover crop. -->
-                                <Border CornerRadius="2"
-                                        Height="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource ThumbHeight}}">
+                                <!-- The Border is the slot and clips to it. The Image inside is
+                                     laid out with width/height swapped on a quarter turn, so
+                                     once rotated about its centre its bounding box is exactly
+                                     the slot - a rotated thumbnail fills its slot and never
+                                     overlaps its neighbours. -->
+                                <Border CornerRadius="2" Height="{x:Bind ThumbnailSlotHeight, Mode=OneWay}">
                                     <Grid>
-                                        <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"/>
+                                        <Canvas>
+                                            <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="UniformToFill"
+                                                   Width="{x:Bind ThumbnailImageWidth, Mode=OneWay}"
+                                                   Height="{x:Bind ThumbnailImageHeight, Mode=OneWay}"
+                                                   Canvas.Left="{x:Bind ThumbnailImageLeft, Mode=OneWay}"
+                                                   Canvas.Top="{x:Bind ThumbnailImageTop, Mode=OneWay}"
+                                                   RenderTransformOrigin="0.5,0.5">
+                                                <Image.RenderTransform>
+                                                    <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
+                                                </Image.RenderTransform>
+                                            </Image>
+                                        </Canvas>
                                         <TextBlock Text="&#x26A0;" FontSize="14"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center"
                                                    Foreground="{StaticResource RejectBrush}"

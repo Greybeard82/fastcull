@@ -167,8 +167,41 @@ namespace Fastcull.ViewModels
                 case AppCommand.SetPicked: ApplyRating(s => s.AsPicked()); break;
                 case AppCommand.SetRejected: ApplyRating(s => s.AsRejected()); break;
                 case AppCommand.SetUnflagged: ApplyRating(s => s.AsUnflagged()); break;
+
+                case AppCommand.RotateRight: RotateActiveRight(); break;
+                case AppCommand.RotateLeft: RotateActiveLeft(); break;
             }
         }
+
+        /// <summary>Rotates the active photo 90 degrees clockwise (PRD 1.11).</summary>
+        public void RotateActiveRight() => ApplyRotation(r => r.RotateRight());
+
+        /// <summary>Rotates the active photo 90 degrees counter-clockwise (PRD 1.11).</summary>
+        public void RotateActiveLeft() => ApplyRotation(r => r.RotateLeft());
+
+        /// <summary>
+        /// Applies a quarter turn to the active item only. Synchronous and awaits nothing, so the
+        /// photo turns within one frame - PRD 3.5 budgets this at the same &lt; 16 ms as a rating
+        /// keypress, on the same reasoning: it is a transform, never a re-decode.
+        ///
+        /// Rotation moves no cursor and changes no rating, exactly as ApplyRating changes no
+        /// cursor and no rotation. The two are entirely independent axes.
+        /// </summary>
+        private void ApplyRotation(Func<Rotation, Rotation> transition)
+        {
+            var item = ActiveItem;
+            if (item is null) return;
+
+            var updated = transition(item.Rotation);
+            if (updated == item.Rotation) return;
+
+            item.Rotation = updated;
+
+            RotationChanged?.Invoke(item);
+        }
+
+        /// <summary>Raised after the active item's Rotation changes.</summary>
+        public event Action<FilmstripItemViewModel>? RotationChanged;
 
         /// <summary>
         /// Applies a ladder transition to the active item only. Synchronous and awaits nothing,

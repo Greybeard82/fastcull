@@ -16,6 +16,8 @@ namespace Fastcull.Input
         SetPicked,
         SetRejected,
         SetUnflagged,
+        RotateRight,     // 90 degrees clockwise
+        RotateLeft,      // 90 degrees counter-clockwise
     }
 
     public readonly record struct ResolvedInput(AppCommand Command, int Payload)
@@ -60,6 +62,11 @@ namespace Fastcull.Input
                 case VirtualKey.C: return new ResolvedInput(AppCommand.SetPicked, 0);
                 case VirtualKey.Z: return new ResolvedInput(AppCommand.SetRejected, 0);
                 case VirtualKey.X: return new ResolvedInput(AppCommand.SetUnflagged, 0);
+                // Rotation (PRD 1.11). A turns clockwise and S turns counter-clockwise - A is
+                // physically left of S while meaning "right", which is deliberate and specified,
+                // not a transposition to be helpfully corrected.
+                case VirtualKey.A: return new ResolvedInput(AppCommand.RotateRight, 0);
+                case VirtualKey.S: return new ResolvedInput(AppCommand.RotateLeft, 0);
             }
 
             return isExtendedKey ? ResolveExtended(key) : ResolveNumpad(key);

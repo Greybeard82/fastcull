@@ -112,23 +112,8 @@ namespace Fastcull.Converters
             => throw new NotSupportedException();
     }
 
-    /// <summary>
-    /// The active thumbnail stands 12px taller than its neighbours (handoff: "Active thumbnail:
-    /// full height + 12px taller ... others: 12px shorter").
-    /// </summary>
-    public sealed class BoolToThumbnailHeightConverter : IValueConverter
-    {
-        // The band is 108px with 8px of padding top and bottom, leaving 92. The mark below each
-        // thumbnail needs 4px of gap plus its own 2px, so the tallest thumbnail can only be 86 -
-        // at 92 the mark is pushed out of the band and silently clipped. These are the
-        // prototype's literal heights, which leave the margin that arithmetic requires.
-        private const double ActiveHeight = 82;
-        private const double InactiveHeight = 70;
-
-        public object Convert(object value, Type targetType, object parameter, string language)
-            => value is true ? ActiveHeight : InactiveHeight;
-
-        public object ConvertBack(object value, Type targetType, object parameter, string language)
-            => throw new NotSupportedException();
-    }
+    // BoolToThumbnailHeightConverter lived here. Thumbnail slot height moved onto
+    // FilmstripItemViewModel as ThumbnailSlotHeight, because rotation made the image's own
+    // width and height depend on that same value - keeping the height in a converter would have
+    // meant three bindings deriving the same number from three different places.
 }

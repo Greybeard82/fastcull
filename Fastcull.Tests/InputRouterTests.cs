@@ -157,10 +157,60 @@ public class InputRouterTests
         }
     }
 
+    // ---- Rotation (PRD 1.11) ----
+
+    [Theory]
+    [InlineData(VirtualKey.A, AppCommand.RotateRight)]
+    [InlineData(VirtualKey.S, AppCommand.RotateLeft)]
+    public void RotationKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
+    {
+        // Letter keys, so the NumLock/extended split must never shadow them.
+        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
+        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
+    }
+
+    [Fact]
+    public void A_IsClockwise_And_S_IsCounterClockwise_DeliberatelyNotSwapped()
+    {
+        // A sits physically LEFT of S on the keyboard while meaning rotate RIGHT. That is the
+        // specified mapping, not a transposition. Asserted explicitly so a future reader who
+        // "fixes" it has to delete a test that says not to.
+        Assert.Equal(AppCommand.RotateRight, InputRouter.Resolve(VirtualKey.A, isExtendedKey: false).Command);
+        Assert.Equal(AppCommand.RotateLeft, InputRouter.Resolve(VirtualKey.S, isExtendedKey: false).Command);
+    }
+
+    [Fact]
+    public void RotationKeys_CarryNoPayload_AndAreNotRatingOrNavigationCommands()
+    {
+        foreach (var key in new[] { VirtualKey.A, VirtualKey.S })
+        {
+            var resolved = InputRouter.Resolve(key, isExtendedKey: false);
+
+            Assert.Equal(0, resolved.Payload);
+            Assert.NotEqual(AppCommand.SetStars, resolved.Command);
+            Assert.NotEqual(AppCommand.LadderUp, resolved.Command);
+            Assert.NotEqual(AppCommand.LadderDown, resolved.Command);
+            Assert.NotEqual(AppCommand.NavigateNext, resolved.Command);
+            Assert.NotEqual(AppCommand.NavigatePrevious, resolved.Command);
+        }
+    }
+
+    [Fact]
+    public void RotationKeys_DoNotCollideWithTheFlagLetters()
+    {
+        var rotation = new[] { VirtualKey.A, VirtualKey.S };
+        var flags = new[] { VirtualKey.Z, VirtualKey.X, VirtualKey.C };
+
+        foreach (var r in rotation)
+            foreach (var f in flags)
+                Assert.NotEqual(
+                    InputRouter.Resolve(f, isExtendedKey: false).Command,
+                    InputRouter.Resolve(r, isExtendedKey: false).Command);
+    }
+
     // ---- Everything else is None ----
 
     [Theory]
-    [InlineData(VirtualKey.A)]
     [InlineData(VirtualKey.Q)]
     [InlineData(VirtualKey.Space)]
     [InlineData(VirtualKey.Enter)]

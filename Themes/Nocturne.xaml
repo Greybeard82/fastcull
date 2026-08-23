@@ -90,6 +90,65 @@
     <x:Double x:Key="StageColumnSpacing">5</x:Double>
     <Thickness x:Key="StagePadding">8,18,8,24</Thickness>
 
+    <!-- ====================== Chromeless glyph button ==================
+         A flat, borderless glyph button for the rotate controls.
+
+         The stock WinUI Button template is unusable here: its resting, hover and pressed
+         visual states all paint near-black greys, and PRD 1.10 requires every non-photograph
+         pixel to be exactly #FF000000. This template never paints a background in ANY state -
+         Transparent over the black ground stays exactly #FF000000 - and expresses state
+         purely as glyph brightness, which also matches the Chromeless language of restraint.
+
+         IsTabStop is off: keyboard is owned at window level by RootGrid_PreviewKeyDown
+         (PRD 2.4), and a focusable button in the caption row could take Space/Enter. -->
+    <Style x:Key="ChromelessGlyphButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="6,1"/>
+        <Setter Property="MinWidth" Value="0"/>
+        <Setter Property="MinHeight" Value="0"/>
+        <Setter Property="IsTabStop" Value="False"/>
+        <Setter Property="UseSystemFocusVisuals" Value="False"/>
+        <Setter Property="Foreground" Value="{StaticResource Neutral600Brush}"/>
+        <Setter Property="FontFamily" Value="{StaticResource UiFontFamily}"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Grid x:Name="Root" Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter x:Name="Presenter"
+                                          Content="{TemplateBinding Content}"
+                                          Foreground="{TemplateBinding Foreground}"
+                                          HorizontalAlignment="Center"
+                                          VerticalAlignment="Center"/>
+                        <VisualStateManager.VisualStateGroups>
+                            <VisualStateGroup x:Name="CommonStates">
+                                <VisualState x:Name="Normal"/>
+                                <VisualState x:Name="PointerOver">
+                                    <VisualState.Setters>
+                                        <Setter Target="Presenter.Foreground" Value="{StaticResource Accent200Brush}"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Pressed">
+                                    <VisualState.Setters>
+                                        <Setter Target="Presenter.Foreground" Value="{StaticResource AccentBrush}"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                                <VisualState x:Name="Disabled">
+                                    <VisualState.Setters>
+                                        <Setter Target="Presenter.Opacity" Value="0.35"/>
+                                    </VisualState.Setters>
+                                </VisualState>
+                            </VisualStateGroup>
+                        </VisualStateManager.VisualStateGroups>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- ============================ Radius ============================= -->
 
     <CornerRadius x:Key="RadiusPhoto">2</CornerRadius>
