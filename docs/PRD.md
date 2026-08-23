@@ -87,21 +87,44 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
 ### 1.5 Layout
 - **Sidebar (left):** auto-hides on pointer exit, pinnable. Contains folder tree, file counts, live rating tallies, format breakdown, and **Finish Session**.
 - **Filmstrip:** virtualized horizontal scroller sized for 21:9 and 32:9. Active image scales to viewport height, neighbours flank left and right at reduced height.
-- **Border states:** yellow = unrated, green = picked, red = rejected. Star count renders as a separate badge overlay, independent of border colour.
+- **State border:** red = rejected, yellow = unrated, green = picked. The star count renders as a numeric badge in the **bottom-right** of the photo, shown only when stars >= 1.
+- **Active indicator:** the active photo carries an additional **blue border drawn immediately outside the state border, at the same thickness**. State colour and active-ness are therefore never confused — they are two concentric rings.
+- **Three-slot window rule:** the top region always shows three consecutive photos. The active photo is the **centre** slot, except at the sequence boundaries: when the active photo is the **first** in the sequence the active marker sits on the **left** slot, and when it is the **last** it sits on the **right** slot. The window itself does not scroll past either end.
 - A small format chip (`ARW`, `JPG`, `PNG`) sits on each filmstrip item. In a mixed folder you need to know what you are looking at without opening the HUD.
 
 ### 1.6 Rating Model
-Two independent axes.
 
-| Axis | Values | Storage |
-| :--- | :--- | :--- |
-| **Flag** | `Unflagged`, `Picked`, `Rejected` | SQLite |
-| **Stars** | `0` to `5` | SQLite |
+A single ordered ladder, not two independent axes. Stars are meaningful only on picked photos, so the two former axes collapse into one monotonic scale.
 
-Rules:
-- Setting stars >= 1 on an `Unflagged` item implicitly sets `Picked`.
-- Setting `Rejected` does not clear stars. Rejection is recoverable and non-destructive.
-- Both the top number row and the **numeric keypad** (`NumPad1` to `NumPad5`) set stars. NumLock state must be handled: with NumLock off the numpad emits navigation keycodes, so `NumPad2` arrives as `Down`, which collides with the Reject binding. Explicit v0.1 test case, it fails silently.
+**The cull ladder — eight ordered states:**
+
+| Index | State | Border | Star badge | Flag (storage) | Stars (storage) |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| 0 | Rejected | Red | none | `Rejected` (2) | 0 |
+| 1 | Unrated | Yellow | none | `Unflagged` (0) | 0 |
+| 2 | Picked | Green | none | `Picked` (1) | 0 |
+| 3 | Picked, 1 star | Green | `1` | `Picked` (1) | 1 |
+| 4 | Picked, 2 stars | Green | `2` | `Picked` (1) | 2 |
+| 5 | Picked, 3 stars | Green | `3` | `Picked` (1) | 3 |
+| 6 | Picked, 4 stars | Green | `4` | `Picked` (1) | 4 |
+| 7 | Picked, 5 stars | Green | `5` | `Picked` (1) | 5 |
+
+**Invariants (hard rules, asserted in code):**
+
+- `Rejected` ⇒ `Stars == 0`. **Stars apply only to picked photos.**
+- `Unflagged` ⇒ `Stars == 0`.
+- `Stars >= 1` ⇒ `Flag == Picked`.
+- Any (Flag, Stars) pair not in the table above is invalid and must never be representable in a persisted row.
+
+**Transitions:**
+
+- `Up` → ladder index + 1, **clamped at 7**. Pressing Up at 5 stars does nothing.
+- `Down` → ladder index − 1, **clamped at 0**. Pressing Down at Rejected does nothing.
+- Both are per-keypress single steps. There is no wrap-around.
+
+**Other rules:**
+
+- Both the top number row and the **numeric keypad** (`NumPad1` to `NumPad5`) set stars. NumLock state must be handled: with NumLock off the numpad emits navigation keycodes, so `NumPad2` arrives as `Down`, which collides with the ladder-down binding. Explicit v0.1 test case, it fails silently.
 - A rating keypress updates the border within one frame. The database write is fire-and-forget on a background channel and never gates the visual.
 
 ### 1.7 Zoom Inspection (GENERALISED)
@@ -133,6 +156,12 @@ Zoom level and pan offset persist across `A` / `D` navigation.
 - Covers flag changes, star changes, and Recycle Bin deletes (restored via the shell API).
 - Does not cover the Finish Session batch operation, which has its own confirmation and log.
 
+### 1.10 Visual theme (OLED black)
+
+FastCull renders on a true-black surface. Every pixel that is not photograph content is `#FF000000` — a fully-off pixel on an OLED panel. This includes the window background, the title bar, empty photo slots, filmstrip card backgrounds, gaps and padding. Near-blacks such as `#0A0A0A` do **not** satisfy this requirement; the value must be exactly `#FF000000`.
+
+Consequences: the app forces dark theme regardless of the system setting, and uses no Mica, Acrylic or other system backdrop, since all of them tint with the desktop wallpaper and can never be fully black. Text and chrome use light foregrounds chosen for legibility against pure black.
+
 ---
 
 ## 2. Control Matrix
@@ -140,19 +169,21 @@ Zoom level and pan offset persist across `A` / `D` navigation.
 ### 2.1 Filmstrip Mode
 | Key | Behaviour |
 | :--- | :--- |
-| `Left` / `Right` | Previous / next image |
-| `Home` / `End` | First / last image |
-| `1`-`5` or `NumPad1`-`NumPad5` | Set star rating directly |
-| `0` / `NumPad0` | Clear stars |
-| `P` or `Up` | Set `Picked` |
-| `X` or `Down` | Set `Rejected` |
-| `U` | Set `Unflagged` |
+| `Left` / `Right` | Previous / next photo |
+| `Up` | Move one step **up** the cull ladder (§1.6), clamped at 5 stars |
+| `Down` | Move one step **down** the cull ladder (§1.6), clamped at Rejected |
+| `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
+| `0` / `NumPad0` | Clear stars, **keep the current flag** |
+| `P` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
+| `X` | Set `Rejected` — ladder index 0, clears stars |
+| `U` | Set `Unflagged` — ladder index 1, clears stars |
+| `Home` / `End` | First / last photo |
 | `Space` | Enter zoom mode |
 | `I` | Toggle metadata HUD |
 | `Delete` | Move file group to Recycle Bin (undoable) |
 | `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
 
-`Up` and `Down` are retained as aliases for `Picked` and `Rejected`. Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of every accelerator, and its key-repeat behaviour is inconsistent.
+Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of every accelerator, and its key-repeat behaviour is inconsistent.
 
 ### 2.2 Zoom Mode
 | Key | Behaviour |
@@ -167,6 +198,10 @@ Input routing is an explicit two-state machine, handled in one place at window l
 
 ### 2.3 Key Repeat
 Holding `Right` must not queue 40 navigation events that replay after release. Navigation input is coalesced: the cursor moves at a fixed maximum rate (suggest 15 per second) and the decode pipeline targets only the settled position, not every intermediate index.
+
+### 2.4 Keyboard ownership
+
+Arrow keys are owned exclusively by the top three-slot region. They navigate and rate. They must **never** scroll the bottom filmstrip, move XY-focus, or be consumed by any child control. The bottom filmstrip is mouse-only: click, drag and wheel.
 
 ---
 
@@ -384,6 +419,7 @@ public enum CompanionKind { Raw, Jpeg, Heif, Xmp, Other }
 - `MetadataExtractor` (fast header parsing across RAW, JPEG, PNG, TIFF, HEIF without invoking a decoder)
 - `CommunityToolkit.Mvvm`
 - `System.Threading.Channels` (in-box)
+- Test stack, test project only, not shipped: `xunit`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`
 
 Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate commercial option. Fine for personal use, needs revisiting if this is ever sold.
 
