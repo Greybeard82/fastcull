@@ -38,6 +38,19 @@ namespace Fastcull.ViewModels
         public string FileName => Photo.FileName;
         public string FormatLabel => Path.GetExtension(Photo.FileName).TrimStart('.').ToUpperInvariant();
 
+        /// <summary>Filename with the extension stripped - the Chromeless caption shows only this.</summary>
+        public string DisplayName => Path.GetFileNameWithoutExtension(Photo.FileName);
+
+        /// <summary>
+        /// Width / height of the decoded display image. The stage's equal-height rule needs every
+        /// visible photo's aspect to pick one shared height, and it needs it before deciding
+        /// layout - so this starts at a 3:2 guess (the overwhelmingly common still-camera aspect,
+        /// and the same fallback the prototype uses) and is corrected the moment the real decode
+        /// lands.
+        /// </summary>
+        [ObservableProperty]
+        private double _aspectRatio = 1.5;
+
         [ObservableProperty]
         private bool _isActive;
 
@@ -46,7 +59,14 @@ namespace Fastcull.ViewModels
         [NotifyPropertyChangedFor(nameof(StateBorderBrush))]
         [NotifyPropertyChangedFor(nameof(StarBadgeText))]
         [NotifyPropertyChangedFor(nameof(IsStarBadgeVisible))]
+        [NotifyPropertyChangedFor(nameof(StarString))]
         private CullState _cullState = CullState.Default;
+
+        /// <summary>
+        /// Stars as a run of filled stars for the Chromeless caption row, empty at zero stars.
+        /// The ladder guarantees 0-5 (PRD 1.6), so this cannot produce a runaway string.
+        /// </summary>
+        public string StarString => CullState.Stars >= 1 ? new string('★', CullState.Stars) : string.Empty;
 
         /// <summary>Red = rejected, yellow = unrated, green = picked (PRD 1.5).</summary>
         public Brush StateBorderBrush => CullState.Flag switch
@@ -158,6 +178,16 @@ namespace Fastcull.ViewModels
             try
             {
                 var bitmap = await DecodeTierAsync(displayTier: true, cancellationToken);
+
+                // Publish the real aspect before the image itself, so the stage's shared-height
+                // pass runs against true dimensions rather than the 3:2 guess and the photo does
+                // not visibly resize a frame after appearing.
+                if (bitmap is not null && bitmap.PixelHeight > 0)
+                {
+                    var ratio = bitmap.PixelWidth / (double)bitmap.PixelHeight;
+                    _dispatcherQueue.TryEnqueue(() => { try { AspectRatio = ratio; } catch { } });
+                }
+
                 await ApplyDecodeResultAsync(bitmap, b => DisplayImage = b, () => DisplayImageFailed = true);
             }
             catch (OperationCanceledException)

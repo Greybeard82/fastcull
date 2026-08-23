@@ -8,38 +8,10 @@ using Windows.UI;
 
 namespace Fastcull.Converters
 {
-    /// <summary>
-    /// Blue active ring for the slot whose index matches ActiveSlot, transparent otherwise
-    /// (PRD 1.5). Pass the slot index 0/1/2 as ConverterParameter.
-    /// </summary>
-    public sealed class ActiveSlotToBrushConverter : IValueConverter
-    {
-        private static readonly SolidColorBrush ActiveBrush = new(Color.FromArgb(0xFF, 0x00, 0x78, 0xD4));
-        private static readonly SolidColorBrush InactiveBrush = new(Colors.Transparent);
-
-        public object Convert(object value, Type targetType, object parameter, string language)
-        {
-            if (value is not int activeSlot) return InactiveBrush;
-            if (parameter is null || !int.TryParse(parameter.ToString(), out var slotIndex)) return InactiveBrush;
-            return activeSlot == slotIndex ? ActiveBrush : InactiveBrush;
-        }
-
-        public object ConvertBack(object value, Type targetType, object parameter, string language)
-            => throw new NotSupportedException();
-    }
-
-    /// <summary>Blue active ring for a bottom-filmstrip thumbnail, transparent when inactive.</summary>
-    public sealed class BoolToActiveRingBrushConverter : IValueConverter
-    {
-        private static readonly SolidColorBrush ActiveBrush = new(Color.FromArgb(0xFF, 0x00, 0x78, 0xD4));
-        private static readonly SolidColorBrush InactiveBrush = new(Colors.Transparent);
-
-        public object Convert(object value, Type targetType, object parameter, string language)
-            => value is true ? ActiveBrush : InactiveBrush;
-
-        public object ConvertBack(object value, Type targetType, object parameter, string language)
-            => throw new NotSupportedException();
-    }
+    // ActiveSlotToBrushConverter and BoolToActiveRingBrushConverter lived here and drew the blue
+    // active ring described by PRD 1.5. The Design/ handoff's "Chromeless" direction removes every
+    // border, so both are gone; active-ness now reads as the accent tick and thumbnail mark in
+    // ChromelessConverters.cs.
 
     /// <summary>
     /// Collapses a slot's chrome entirely when the slot is empty (PRD 1.5 / E.3).

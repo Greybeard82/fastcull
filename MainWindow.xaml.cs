@@ -32,6 +32,27 @@ namespace Fastcull
             InitializeComponent();
             ApplyBlackTitleBar();
             AppWindow.Closing += AppWindow_Closing;
+
+            // Hand the custom strip to the window so it still drags, and keep the counter clear
+            // of the caption buttons.
+            SetTitleBar(TitleBarDragRegion);
+            TitleBarDragRegion.SizeChanged += (_, _) => ReserveCaptionButtonSpace();
+            ReserveCaptionButtonSpace();
+        }
+
+        /// <summary>
+        /// Pads the title bar's right edge by the width the system reserves for the minimize /
+        /// maximize / close buttons, plus the handoff's 30px gap. RightInset is in raw physical
+        /// pixels while XAML layout is in DIPs, so it has to be scaled - hard-coding a width
+        /// would drift on a non-100% display or if the caption buttons ever change size.
+        /// </summary>
+        private void ReserveCaptionButtonSpace()
+        {
+            var scale = TitleBarDragRegion.XamlRoot?.RasterizationScale ?? 1.0;
+            if (scale <= 0) scale = 1.0;
+
+            var captionWidth = AppWindow.TitleBar.RightInset / scale;
+            TitleBarDragRegion.Padding = new Thickness(11.2, 0, captionWidth + 30, 0);
         }
 
         /// <summary>True once the shutdown flush has finished and the window may really close.</summary>

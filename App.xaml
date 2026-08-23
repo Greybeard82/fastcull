@@ -9,6 +9,9 @@
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <!-- Nocturne tokens from the Design/ handoff. Merged after the stock controls
+                     dictionary so nothing in it can shadow these. -->
+                <ResourceDictionary Source="ms-appx:///Themes/Nocturne.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
             <!-- PRD 1.10 (OLED black): every pixel that is not photograph content must be

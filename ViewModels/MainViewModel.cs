@@ -22,7 +22,11 @@ namespace Fastcull.ViewModels
         public ObservableCollection<FilmstripItemViewModel> Items { get; } = new();
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(PositionText))]
         private int _activeIndex = -1;
+
+        /// <summary>Session position counter for the title bar, e.g. "1204 / 2000".</summary>
+        public string PositionText => Items.Count == 0 ? string.Empty : $"{ActiveIndex + 1} / {Items.Count}";
 
         [ObservableProperty]
         private FilmstripItemViewModel? _slot0Item;

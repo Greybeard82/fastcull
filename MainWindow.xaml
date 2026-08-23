@@ -13,7 +13,26 @@
     <!-- No SystemBackdrop: Mica and Acrylic both tint with the desktop wallpaper and can never
          be fully black, which PRD 1.10 requires. -->
 
-    <Grid x:Name="RootGrid" Background="#FF000000" PreviewKeyDown="RootGrid_PreviewKeyDown">
-        <views:FilmstripView x:Name="Filmstrip"/>
+    <Grid x:Name="RootGrid" Background="#FF000000" RowDefinitions="30,*"
+          PreviewKeyDown="RootGrid_PreviewKeyDown">
+
+        <!-- Title bar (Design/ handoff): wordmark left, session position counter right, then the
+             system caption buttons. Content is extended into the title bar in code-behind so the
+             whole strip can be pure black; TitleBarDragRegion is handed to SetTitleBar there so
+             the window still drags. RightInset reserves room for the caption buttons and is set
+             at runtime, since its width is system- and DPI-dependent. -->
+        <Grid x:Name="TitleBarDragRegion" Grid.Row="0" Background="#FF000000" Padding="11.2,0,5.6,0">
+            <TextBlock Text="FASTCULL" FontSize="10" CharacterSpacing="120"
+                       FontFamily="{StaticResource UiFontFamily}"
+                       VerticalAlignment="Center" HorizontalAlignment="Left"
+                       Foreground="{StaticResource Neutral700Brush}"/>
+            <TextBlock x:Name="PositionCounter" FontSize="10" CharacterSpacing="80"
+                       FontFamily="{StaticResource UiFontFamily}"
+                       VerticalAlignment="Center" HorizontalAlignment="Right"
+                       Foreground="{StaticResource Neutral700Brush}"
+                       Text="{x:Bind Filmstrip.ViewModel.PositionText, Mode=OneWay}"/>
+        </Grid>
+
+        <views:FilmstripView x:Name="Filmstrip" Grid.Row="1"/>
     </Grid>
 </Window>
