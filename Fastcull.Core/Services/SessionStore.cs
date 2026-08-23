@@ -10,8 +10,35 @@ using Microsoft.Data.Sqlite;
 
 namespace Fastcull.Services
 {
-    /// <summary>A pending rating write for one photo.</summary>
-    public readonly record struct RatingWrite(string Path, Flag Flag, int Stars);
+    /// <summary>
+    /// A pending write for one photo. Each field is optional so a write can say "set the rating,
+    /// leave rotation alone" or the reverse.
+    ///
+    /// That optionality is load-bearing rather than tidiness. The background writer collapses
+    /// pending writes by path so rapid changes to one photo land as one row - which means a
+    /// rating write and a rotation write for the same photo inside one batch would otherwise
+    /// overwrite each other, and whichever arrived second would silently reset the other's value.
+    /// Unset fields are merged, then written with COALESCE so they keep whatever is in the row.
+    /// </summary>
+    public readonly record struct PhotoWrite(string Path, Flag? Flag, int? Stars, int? RotationQuarterTurns)
+    {
+        /// <summary>Later values win field by field; fields the later write left unset survive.</summary>
+        public PhotoWrite MergedWith(PhotoWrite later) => new(
+            Path,
+            later.Flag ?? Flag,
+            later.Stars ?? Stars,
+            later.RotationQuarterTurns ?? RotationQuarterTurns);
+    }
+
+    /// <summary>
+    /// Everything persisted about one photo. A single record per photo rather than one dictionary
+    /// per field: two dictionaries keyed by path that have to be kept in sync is a bug waiting to
+    /// happen.
+    /// </summary>
+    public readonly record struct StoredPhotoState(CullState Cull, Rotation Rotation)
+    {
+        public static readonly StoredPhotoState Default = new(CullState.Default, Rotation.None);
+    }
 
     /// <summary>
     /// File-backed session persistence, per PRD 3.1.
@@ -28,7 +55,7 @@ namespace Fastcull.Services
         public static readonly TimeSpan BatchInterval = TimeSpan.FromMilliseconds(250);
 
         private readonly SqliteConnection _connection;
-        private readonly Channel<RatingWrite> _channel;
+        private readonly Channel<PhotoWrite> _channel;
         private readonly Task _writerTask;
         private readonly CancellationTokenSource _shutdown = new();
 
@@ -43,7 +70,7 @@ namespace Fastcull.Services
 
             // Bounded so a runaway producer cannot grow without limit; the UI never awaits it
             // because QueueRating uses TryWrite rather than WriteAsync.
-            _channel = Channel.CreateBounded<RatingWrite>(new BoundedChannelOptions(4096)
+            _channel = Channel.CreateBounded<PhotoWrite>(new BoundedChannelOptions(4096)
             {
                 SingleReader = true,
                 SingleWriter = false,
@@ -135,6 +162,7 @@ namespace Fastcull.Services
                   file_bytes     INTEGER NOT NULL,
                   flag           INTEGER NOT NULL DEFAULT 0,
                   stars          INTEGER NOT NULL DEFAULT 0,
+                  rotation       INTEGER NOT NULL DEFAULT 0,
                   deleted        INTEGER NOT NULL DEFAULT 0,
                   image_w        INTEGER,
                   image_h        INTEGER,
@@ -149,6 +177,8 @@ namespace Fastcull.Services
                 """;
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
+            await MigrateAsync(connection).ConfigureAwait(false);
+
             cmd.CommandText = "SELECT COUNT(*) FROM session_meta;";
             var count = System.Convert.ToInt64(await cmd.ExecuteScalarAsync().ConfigureAwait(false));
             if (count == 0)
@@ -157,6 +187,61 @@ namespace Fastcull.Services
                 cmd.Parameters.AddWithValue("$root", rootFolder);
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
+        }
+
+        /// <summary>Schema revision. 1 added photos.rotation (PRD 1.11).</summary>
+        public const int SchemaVersion = 1;
+
+        /// <summary>
+        /// Brings an existing database up to <see cref="SchemaVersion"/>.
+        ///
+        /// This exists because CREATE TABLE IF NOT EXISTS is a no-op against a database that
+        /// already has the table - so adding a column to that statement does nothing whatsoever
+        /// for the session databases already sitting in %LOCALAPPDATA%, and the first rotation
+        /// write against one would fail with "no such column: rotation".
+        ///
+        /// The guard is PRAGMA table_info rather than user_version alone, deliberately. A fresh
+        /// database gets the column from CREATE TABLE while its user_version is still 0, so a
+        /// version-only check would try to add a column that already exists and throw. Asking
+        /// the schema what it actually contains is correct for both paths and is idempotent.
+        /// user_version is still recorded, for cheap versioning of whatever comes next.
+        /// </summary>
+        private static async Task MigrateAsync(SqliteConnection connection)
+        {
+            if (!await ColumnExistsAsync(connection, "photos", "rotation").ConfigureAwait(false))
+            {
+                using var alter = connection.CreateCommand();
+                alter.CommandText = "ALTER TABLE photos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0;";
+                await alter.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+            using var version = connection.CreateCommand();
+            version.CommandText = $"PRAGMA user_version = {SchemaVersion};";
+            await version.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        private static async Task<bool> ColumnExistsAsync(SqliteConnection connection, string table, string column)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"PRAGMA table_info({table});";
+
+            using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                // table_info columns: cid, name, type, notnull, dflt_value, pk
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>Current schema revision recorded in the database.</summary>
+        public async Task<int> ReadSchemaVersionAsync()
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "PRAGMA user_version;";
+            return System.Convert.ToInt32(await cmd.ExecuteScalarAsync().ConfigureAwait(false));
         }
 
         /// <summary>
@@ -209,16 +294,34 @@ namespace Fastcull.Services
         public void QueueRating(string path, CullState state)
         {
             // Constructing through CullState already guarantees the invariants, so an invalid
-            // (flag, stars) pair cannot reach the database through this path.
-            _channel.Writer.TryWrite(new RatingWrite(path, state.Flag, state.Stars));
+            // (flag, stars) pair cannot reach the database through this path. Rotation is left
+            // unset so this write cannot disturb it.
+            _channel.Writer.TryWrite(new PhotoWrite(path, state.Flag, state.Stars, null));
+        }
+
+        /// <summary>
+        /// Fire-and-forget rotation write (PRD 1.11). Same guarantees as <see cref="QueueRating"/>:
+        /// synchronous, non-blocking, never throws, safe on the UI thread every keypress. Flag and
+        /// stars are left unset so rotating a photo can never disturb its rating.
+        /// </summary>
+        public void QueueRotation(string path, Rotation rotation)
+        {
+            _channel.Writer.TryWrite(new PhotoWrite(path, null, null, rotation.QuarterTurns));
         }
 
         private async Task RunWriterAsync(CancellationToken cancellationToken)
         {
             // Collapse repeated writes to the same photo: rapid laddering on one image should
             // land one row, not forty (work order H.4).
-            var pending = new Dictionary<string, RatingWrite>(StringComparer.OrdinalIgnoreCase);
+            var pending = new Dictionary<string, PhotoWrite>(StringComparer.OrdinalIgnoreCase);
             var reader = _channel.Reader;
+
+            // Merge rather than replace: a rating write and a rotation write for the same photo
+            // in one batch must combine, not overwrite one another.
+            void Accumulate(PhotoWrite write) =>
+                pending[write.Path] = pending.TryGetValue(write.Path, out var existing)
+                    ? existing.MergedWith(write)
+                    : write;
 
             try
             {
@@ -230,7 +333,7 @@ namespace Fastcull.Services
                     {
                         while (reader.TryRead(out var write))
                         {
-                            pending[write.Path] = write;
+                            Accumulate(write);
                             if (pending.Count >= BatchSize) break;
                         }
 
@@ -268,7 +371,7 @@ namespace Fastcull.Services
                 Debug.WriteLine($"[FastCull] SessionStore writer failed: {ex}");
             }
 
-            while (reader.TryRead(out var late)) pending[late.Path] = late;
+            while (reader.TryRead(out var late)) Accumulate(late);
             if (pending.Count > 0)
             {
                 try { await FlushAsync(pending).ConfigureAwait(false); }
@@ -276,21 +379,33 @@ namespace Fastcull.Services
             }
         }
 
-        private async Task FlushAsync(Dictionary<string, RatingWrite> batch)
+        private async Task FlushAsync(Dictionary<string, PhotoWrite> batch)
         {
             using var transaction = _connection.BeginTransaction();
             using var cmd = _connection.CreateCommand();
             cmd.Transaction = transaction;
-            cmd.CommandText = "UPDATE photos SET flag = $flag, stars = $stars WHERE path = $path;";
+
+            // COALESCE so an unset field keeps whatever the row already holds. This is what lets
+            // a rotation write leave the rating alone, and vice versa, without the writer having
+            // to read the row first.
+            cmd.CommandText = """
+                UPDATE photos SET
+                  flag     = COALESCE($flag, flag),
+                  stars    = COALESCE($stars, stars),
+                  rotation = COALESCE($rotation, rotation)
+                WHERE path = $path;
+                """;
 
             var pFlag = cmd.Parameters.Add("$flag", SqliteType.Integer);
             var pStars = cmd.Parameters.Add("$stars", SqliteType.Integer);
+            var pRotation = cmd.Parameters.Add("$rotation", SqliteType.Integer);
             var pPath = cmd.Parameters.Add("$path", SqliteType.Text);
 
             foreach (var write in batch.Values)
             {
-                pFlag.Value = (int)write.Flag;
-                pStars.Value = write.Stars;
+                pFlag.Value = write.Flag is Flag f ? (int)f : (object)DBNull.Value;
+                pStars.Value = (object?)write.Stars ?? DBNull.Value;
+                pRotation.Value = (object?)write.RotationQuarterTurns ?? DBNull.Value;
                 pPath.Value = write.Path;
                 await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
@@ -299,15 +414,15 @@ namespace Fastcull.Services
         }
 
         /// <summary>
-        /// Loads stored ratings keyed by path. Photos with no stored row are simply absent, and
-        /// the caller gives them <see cref="CullState.Default"/>.
+        /// Loads everything persisted per photo, keyed by path. Photos with no stored row are
+        /// simply absent, and the caller gives them <see cref="StoredPhotoState.Default"/>.
         /// </summary>
-        public async Task<Dictionary<string, CullState>> LoadRatingsAsync()
+        public async Task<Dictionary<string, StoredPhotoState>> LoadPhotoStatesAsync()
         {
-            var result = new Dictionary<string, CullState>(StringComparer.OrdinalIgnoreCase);
+            var result = new Dictionary<string, StoredPhotoState>(StringComparer.OrdinalIgnoreCase);
 
             using var cmd = _connection.CreateCommand();
-            cmd.CommandText = "SELECT path, flag, stars FROM photos;";
+            cmd.CommandText = "SELECT path, flag, stars, rotation FROM photos;";
             using var reader = await cmd.ExecuteReaderAsync().ConfigureAwait(false);
 
             while (await reader.ReadAsync().ConfigureAwait(false))
@@ -316,15 +431,20 @@ namespace Fastcull.Services
                 var flag = (Flag)reader.GetInt32(1);
                 var stars = reader.GetInt32(2);
 
+                // FromQuarterTurns normalises, so even a hand-edited 47 or -3 lands in 0-3
+                // rather than rendering at an arbitrary angle.
+                var rotation = Rotation.FromQuarterTurns(reader.IsDBNull(3) ? 0 : reader.GetInt32(3));
+
                 try
                 {
-                    result[path] = new CullState(flag, stars);
+                    result[path] = new StoredPhotoState(new CullState(flag, stars), rotation);
                 }
                 catch (Exception)
                 {
                     // A row that violates the ladder invariants (hand-edited, or written by an
-                    // older build) must not stop the session loading - fall back to Default.
-                    result[path] = CullState.Default;
+                    // older build) must not stop the session loading - fall back to Default, but
+                    // keep the rotation, which has no invariant to violate.
+                    result[path] = new StoredPhotoState(CullState.Default, rotation);
                 }
             }
 

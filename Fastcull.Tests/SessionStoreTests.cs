@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -56,15 +56,18 @@ public class SessionStoreTests : IDisposable
         }   // DisposeAsync drains and flushes
 
         await using var reopened = await OpenAsync();
-        var loaded = await reopened.LoadRatingsAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
 
         for (var i = 0; i < 8; i++)
         {
             var expected = CullState.FromLadderIndex(i);
-            Assert.True(loaded.TryGetValue(photos[i].FilePath, out var actual), $"missing row for ladder index {i}");
-            Assert.Equal(expected.Flag, actual.Flag);
-            Assert.Equal(expected.Stars, actual.Stars);
-            Assert.Equal(i, actual.LadderIndex);
+            Assert.True(loaded.TryGetValue(photos[i].FilePath, out var stored), $"missing row for ladder index {i}");
+            Assert.Equal(expected.Flag, stored.Cull.Flag);
+            Assert.Equal(expected.Stars, stored.Cull.Stars);
+            Assert.Equal(i, stored.Cull.LadderIndex);
+
+            // Rating writes must leave rotation alone.
+            Assert.Equal(Rotation.None, stored.Rotation);
         }
     }
 
@@ -80,10 +83,10 @@ public class SessionStoreTests : IDisposable
         }
 
         await using var reopened = await OpenAsync();
-        var loaded = await reopened.LoadRatingsAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
 
-        Assert.Equal(5, loaded[photo.FilePath].Stars);
-        Assert.Equal(Flag.Picked, loaded[photo.FilePath].Flag);
+        Assert.Equal(5, loaded[photo.FilePath].Cull.Stars);
+        Assert.Equal(Flag.Picked, loaded[photo.FilePath].Cull.Flag);
     }
 
     [Fact]
@@ -107,9 +110,9 @@ public class SessionStoreTests : IDisposable
         }
 
         await using var reopened = await OpenAsync();
-        var loaded = await reopened.LoadRatingsAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
 
-        Assert.Equal(100, photos.Count(p => loaded.TryGetValue(p.FilePath, out var s) && s.Stars == 5));
+        Assert.Equal(100, photos.Count(p => loaded.TryGetValue(p.FilePath, out var s) && s.Cull.Stars == 5));
     }
 
     [Fact]
@@ -130,9 +133,9 @@ public class SessionStoreTests : IDisposable
         }
 
         await using var reopened = await OpenAsync();
-        var loaded = await reopened.LoadRatingsAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
 
-        Assert.Equal(3, loaded[photo.FilePath].LadderIndex);
+        Assert.Equal(3, loaded[photo.FilePath].Cull.LadderIndex);
 
         // The schema's UNIQUE(path) means collapsing is structural: one row per photo, never 40.
         Assert.Single(loaded, kv => kv.Key == photo.FilePath);
@@ -151,7 +154,7 @@ public class SessionStoreTests : IDisposable
         await store.RegisterPhotosAsync(new[] { photo });
 
         store.QueueRating(photo.FilePath, new CullState(Flag.Picked, 4));
-        var loaded = await store.LoadRatingsAsync();
+        var loaded = await store.LoadPhotoStatesAsync();
         Assert.True(loaded.ContainsKey(photo.FilePath));
     }
 
@@ -159,7 +162,7 @@ public class SessionStoreTests : IDisposable
     public async Task LoadFromEmptyDatabase_ReturnsEmpty_DoesNotThrow()
     {
         await using var store = await OpenAsync();
-        var loaded = await store.LoadRatingsAsync();
+        var loaded = await store.LoadPhotoStatesAsync();
         Assert.Empty(loaded);
     }
 
@@ -180,16 +183,16 @@ public class SessionStoreTests : IDisposable
 
         await using var reopened = await OpenAsync();
         await reopened.RegisterPhotosAsync(nextRun);
-        var loaded = await reopened.LoadRatingsAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
 
-        Assert.Equal(Flag.Picked, loaded[original[0].FilePath].Flag);
+        Assert.Equal(Flag.Picked, loaded[original[0].FilePath].Cull.Flag);
 
         // A photo with no stored rating simply takes the default at the call site.
-        var dState = loaded.TryGetValue(nextRun[2].FilePath, out var d) ? d : CullState.Default;
+        var dState = loaded.TryGetValue(nextRun[2].FilePath, out var d) ? d.Cull : CullState.Default;
         Assert.Equal(CullState.Default.LadderIndex, dState.LadderIndex);
 
         // The row for the now-missing b.jpg is still readable and harmless.
-        Assert.Equal(Flag.Rejected, loaded[original[1].FilePath].Flag);
+        Assert.Equal(Flag.Rejected, loaded[original[1].FilePath].Cull.Flag);
     }
 
     [Fact]
@@ -202,8 +205,203 @@ public class SessionStoreTests : IDisposable
         await store.RegisterPhotosAsync(photos);   // second scan of the same folder
         await store.RegisterPhotosAsync(photos);
 
-        var loaded = await store.LoadRatingsAsync();
+        var loaded = await store.LoadPhotoStatesAsync();
         Assert.Equal(2, loaded.Count);
+    }
+
+    // ---- Rotation (PRD 1.11) ----
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task EveryRotationRoundTrips(int quarterTurns)
+    {
+        var photo = Photo($"rot{quarterTurns}.jpg");
+
+        await using (var store = await OpenAsync())
+        {
+            await store.RegisterPhotosAsync(new[] { photo });
+            store.QueueRotation(photo.FilePath, Rotation.FromQuarterTurns(quarterTurns));
+        }
+
+        await using var reopened = await OpenAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
+
+        Assert.Equal(Rotation.FromQuarterTurns(quarterTurns), loaded[photo.FilePath].Rotation);
+    }
+
+    [Fact]
+    public async Task RotationAndRatingOnTheSamePhoto_DoNotClobberEachOther()
+    {
+        // Both land in one batch, and the writer collapses pending writes by path - so without
+        // field-level merging whichever arrived second would silently reset the other.
+        var photo = Photo("both.jpg");
+
+        await using (var store = await OpenAsync())
+        {
+            await store.RegisterPhotosAsync(new[] { photo });
+            store.QueueRating(photo.FilePath, CullState.FromLadderIndex(6));    // Picked, 4 stars
+            store.QueueRotation(photo.FilePath, Rotation.FromQuarterTurns(3));
+            store.QueueRating(photo.FilePath, CullState.FromLadderIndex(7));    // Picked, 5 stars
+        }
+
+        await using var reopened = await OpenAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
+
+        Assert.Equal(5, loaded[photo.FilePath].Cull.Stars);
+        Assert.Equal(Rotation.FromQuarterTurns(3), loaded[photo.FilePath].Rotation);
+    }
+
+    [Fact]
+    public async Task RotatingManyPhotos_NeverBlocksTheCaller()
+    {
+        var photos = Enumerable.Range(0, 100).Select(i => Photo($"spin{i}.jpg")).ToList();
+
+        await using (var store = await OpenAsync())
+        {
+            await store.RegisterPhotosAsync(photos);
+
+            var sw = Stopwatch.StartNew();
+            foreach (var p in photos)
+                store.QueueRotation(p.FilePath, Rotation.FromQuarterTurns(2));
+            sw.Stop();
+
+            Assert.True(sw.ElapsedMilliseconds < 250,
+                $"QueueRotation blocked the caller: 100 calls took {sw.ElapsedMilliseconds} ms");
+        }
+
+        await using var reopened = await OpenAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
+
+        Assert.Equal(100, photos.Count(p =>
+            loaded.TryGetValue(p.FilePath, out var s) && s.Rotation == Rotation.FromQuarterTurns(2)));
+    }
+
+    [Fact]
+    public async Task FreshDatabase_IsAtTheCurrentSchemaVersion()
+    {
+        await using var store = await OpenAsync();
+        Assert.Equal(SessionStore.SchemaVersion, await store.ReadSchemaVersionAsync());
+    }
+
+    /// <summary>
+    /// The migration test that actually matters. CREATE TABLE IF NOT EXISTS is a no-op against a
+    /// database that already exists, so a database written by the previous build has no rotation
+    /// column - and real ones are sitting in %LOCALAPPDATA% right now. Opening one must add the
+    /// column rather than failing the first rotation write with "no such column: rotation".
+    /// </summary>
+    [Fact]
+    public async Task PreExistingDatabaseWithoutTheRotationColumn_IsMigratedOnOpen()
+    {
+        var photo = Photo("legacy.jpg");
+        var legacyDb = Path.Combine(_sessionDir, "legacy.db");
+
+        // Build a database with the PREVIOUS schema: no rotation column at all.
+        await using (var raw = new Microsoft.Data.Sqlite.SqliteConnection(
+            new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = legacyDb,
+                Mode = Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate,
+            }.ToString()))
+        {
+            await raw.OpenAsync();
+            using var cmd = raw.CreateCommand();
+            cmd.CommandText = """
+                CREATE TABLE photos (
+                  id             INTEGER PRIMARY KEY,
+                  path           TEXT NOT NULL UNIQUE,
+                  rel_path       TEXT NOT NULL,
+                  basename       TEXT NOT NULL,
+                  extension      TEXT NOT NULL,
+                  format_family  INTEGER NOT NULL,
+                  sort_time      TEXT NOT NULL,
+                  sort_time_tier INTEGER NOT NULL,
+                  capture_subsec INTEGER,
+                  file_bytes     INTEGER NOT NULL,
+                  flag           INTEGER NOT NULL DEFAULT 0,
+                  stars          INTEGER NOT NULL DEFAULT 0,
+                  deleted        INTEGER NOT NULL DEFAULT 0,
+                  image_w        INTEGER,
+                  image_h        INTEGER,
+                  preview_w      INTEGER,
+                  preview_h      INTEGER,
+                  thumb_blob     BLOB,
+                  meta_json      TEXT
+                );
+                CREATE TABLE companions (photo_id INTEGER, path TEXT, kind TEXT);
+                CREATE TABLE session_meta (root_path TEXT NOT NULL);
+                """;
+            await cmd.ExecuteNonQueryAsync();
+
+            cmd.CommandText = "INSERT INTO session_meta (root_path) VALUES ($root);";
+            cmd.Parameters.AddWithValue("$root", _root);
+            await cmd.ExecuteNonQueryAsync();
+
+            // A photo already rated by the old build, to prove the migration preserves data.
+            cmd.Parameters.Clear();
+            cmd.CommandText = """
+                INSERT INTO photos (path, rel_path, basename, extension, format_family,
+                                    sort_time, sort_time_tier, capture_subsec, file_bytes, flag, stars)
+                VALUES ($p, 'legacy.jpg', 'legacy', '.jpg', 1, '2026-08-23T03:00:00', 1, NULL, 10, 1, 3);
+                """;
+            cmd.Parameters.AddWithValue("$p", photo.FilePath);
+            await cmd.ExecuteNonQueryAsync();
+        }
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+        // Opening through SessionStore must find this database by root and migrate it in place.
+        await using (var store = await OpenAsync())
+        {
+            Assert.Equal(legacyDb, store.DatabasePath);
+            Assert.Equal(SessionStore.SchemaVersion, await store.ReadSchemaVersionAsync());
+
+            // The pre-existing rating survived, and defaults to no rotation.
+            var afterMigration = await store.LoadPhotoStatesAsync();
+            Assert.Equal(3, afterMigration[photo.FilePath].Cull.Stars);
+            Assert.Equal(Rotation.None, afterMigration[photo.FilePath].Rotation);
+
+            // And the write that would previously have thrown "no such column" now works.
+            store.QueueRotation(photo.FilePath, Rotation.FromQuarterTurns(2));
+        }
+
+        await using var reopened = await OpenAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
+
+        Assert.Equal(Rotation.FromQuarterTurns(2), loaded[photo.FilePath].Rotation);
+        Assert.Equal(3, loaded[photo.FilePath].Cull.Stars);
+    }
+
+    [Fact]
+    public async Task MigrationIsIdempotent_AcrossRepeatedOpens()
+    {
+        var photo = Photo("repeat.jpg");
+
+        for (var i = 0; i < 3; i++)
+        {
+            await using var store = await OpenAsync();
+            await store.RegisterPhotosAsync(new[] { photo });
+            Assert.Equal(SessionStore.SchemaVersion, await store.ReadSchemaVersionAsync());
+        }
+    }
+
+    [Fact]
+    public async Task OutOfRangeStoredRotation_IsNormalisedNotRenderedAsIs()
+    {
+        // A hand-edited or future-build row must not produce an arbitrary angle.
+        var photo = Photo("weird.jpg");
+
+        await using (var store = await OpenAsync())
+        {
+            await store.RegisterPhotosAsync(new[] { photo });
+            store.QueueRotation(photo.FilePath, Rotation.FromQuarterTurns(-1));   // normalises to 3
+        }
+
+        await using var reopened = await OpenAsync();
+        var loaded = await reopened.LoadPhotoStatesAsync();
+
+        Assert.Equal(3, loaded[photo.FilePath].Rotation.QuarterTurns);
     }
 
     [Fact]

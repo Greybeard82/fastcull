@@ -65,12 +65,12 @@ namespace Fastcull.ViewModels
 
             // Persistence must never stop the app opening: a locked or corrupt session DB
             // degrades to an in-memory session rather than an empty filmstrip.
-            Dictionary<string, CullState> stored = new(StringComparer.OrdinalIgnoreCase);
+            Dictionary<string, StoredPhotoState> stored = new(StringComparer.OrdinalIgnoreCase);
             try
             {
                 _sessionStore = await SessionStore.OpenAsync(root);
                 await _sessionStore.RegisterPhotosAsync(sorted);
-                stored = await _sessionStore.LoadRatingsAsync();
+                stored = await _sessionStore.LoadPhotoStatesAsync();
             }
             catch (Exception ex)
             {
@@ -83,7 +83,11 @@ namespace Fastcull.ViewModels
             foreach (var photo in sorted)
             {
                 var item = new FilmstripItemViewModel(photo, index);
-                if (stored.TryGetValue(photo.FilePath, out var state)) item.CullState = state;
+                if (stored.TryGetValue(photo.FilePath, out var state))
+                {
+                    item.CullState = state.Cull;
+                    item.Rotation = state.Rotation;
+                }
                 Items.Add(item);
                 index++;
             }
@@ -196,6 +200,10 @@ namespace Fastcull.ViewModels
             if (updated == item.Rotation) return;
 
             item.Rotation = updated;
+
+            // Same fire-and-forget channel the ratings use (PRD 3.1): a non-blocking TryWrite,
+            // never an awaited database call on the UI thread.
+            _sessionStore?.QueueRotation(item.Photo.FilePath, updated);
 
             RotationChanged?.Invoke(item);
         }
