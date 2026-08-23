@@ -76,6 +76,20 @@
     <x:Double x:Key="Space6">16.8</x:Double>
     <x:Double x:Key="Space8">22.4</x:Double>
 
+    <!-- ========================= Stage geometry ========================
+         Tuned for maximum photo real estate: the three photos sit almost edge to edge and
+         the stage runs nearly the full window width. Vertical padding is deliberately NOT
+         squeezed - it carries the accent tick above each photo and the weight bar plus
+         caption below, which is the entire state read in the Chromeless look.
+
+         These are the single definition. Views/FilmstripView.xaml applies them, and the
+         code-behind reads the applied ColumnSpacing back off the Grid rather than keeping
+         its own copy, so the equal-height rule can never be computed against a spacing
+         that no longer exists. -->
+
+    <x:Double x:Key="StageColumnSpacing">5</x:Double>
+    <Thickness x:Key="StagePadding">8,18,8,24</Thickness>
+
     <!-- ============================ Radius ============================= -->
 
     <CornerRadius x:Key="RadiusPhoto">2</CornerRadius>

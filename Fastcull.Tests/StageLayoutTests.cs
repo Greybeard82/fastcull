@@ -80,6 +80,36 @@ namespace Fastcull.Tests
         }
 
         [Fact]
+        public void CellWidthRemovesOneFewerGapsThanColumns()
+        {
+            // Three columns have two gaps between them, not three. Getting this wrong is the
+            // trap the work order called out - it silently mis-sizes every photo on stage.
+            Assert.Equal((1440.0 - 10) / 3, StageLayout.ComputeCellWidth(1440, columnSpacing: 5), precision: 6);
+            Assert.Equal((1440.0 - 68) / 3, StageLayout.ComputeCellWidth(1440, columnSpacing: 34), precision: 6);
+        }
+
+        [Fact]
+        public void TighterSpacingProducesWiderCells()
+        {
+            // The whole point of dropping the spacing from 34 to 5 is more photo per cell.
+            var before = StageLayout.ComputeCellWidth(1440, columnSpacing: 34);
+            var after = StageLayout.ComputeCellWidth(1440, columnSpacing: 5);
+
+            Assert.True(after > before, $"expected tighter spacing to widen cells: {before} -> {after}");
+        }
+
+        [Fact]
+        public void CellWidthHandlesDegenerateInput()
+        {
+            Assert.Equal(0, StageLayout.ComputeCellWidth(0, 5));
+            Assert.Equal(0, StageLayout.ComputeCellWidth(1440, 5, columnCount: 0));
+            Assert.Equal(0, StageLayout.ComputeCellWidth(4, 5));   // gaps exceed the stage
+
+            // A spacing that never got a real value must not poison the arithmetic.
+            Assert.Equal(1440.0 / 3, StageLayout.ComputeCellWidth(1440, double.NaN), precision: 6);
+        }
+
+        [Fact]
         public void NoRoomOrNoPhotosYieldsZeroRatherThanNegativeLayout()
         {
             Assert.Equal(0, StageLayout.ComputeSharedHeight(0, 400, new[] { 1.5 }));

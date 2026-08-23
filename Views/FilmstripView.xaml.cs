@@ -25,8 +25,10 @@ namespace Fastcull.Views
         private const double ThumbWidth = 150;
         private const double ThumbSpacing = 8;
 
-        // Stage geometry, from the handoff's literal values.
-        private const double StageColumnSpacing = 34;
+        // Stage geometry. Column spacing and padding are NOT duplicated here on purpose: they
+        // are declared once in Themes/Nocturne.xaml, applied by the XAML, and read back off the
+        // live Grid below. A private copy of the spacing would silently drift out of sync with
+        // the markup and size every photo against a cell width that does not exist.
         private const double TickHeight = 2;
         private const double TickMarginBottom = 2;
         private const double CellSpacing = 12;
@@ -123,7 +125,9 @@ namespace Fastcull.Views
             var stageHeight = Stage.ActualHeight;
             if (stageWidth <= 0 || stageHeight <= 0) return;
 
-            var cellWidth = (stageWidth - (StageColumnSpacing * 2)) / 3;
+            // Read the spacing the Grid actually applied rather than a local constant, so the
+            // cell width is always derived from the layout that is really on screen.
+            var cellWidth = StageLayout.ComputeCellWidth(stageWidth, Stage.ColumnSpacing, columnCount: 3);
             var cellHeight = stageHeight - CellChromeHeight;
             if (cellWidth <= 0 || cellHeight <= 0) return;
 

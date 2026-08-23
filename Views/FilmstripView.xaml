@@ -36,8 +36,9 @@
         <!-- ================================ STAGE ================================
              Three consecutive photos (PRD 1.5), the active one centred except at the
              sequence ends. Padding and gap are the handoff's literal values. -->
-        <Border Grid.Row="0" Padding="40,18,40,24">
-            <Grid x:Name="Stage" ColumnDefinitions="1*,1*,1*" ColumnSpacing="34"
+        <Border Grid.Row="0" Padding="{StaticResource StagePadding}">
+            <Grid x:Name="Stage" ColumnDefinitions="1*,1*,1*"
+                  ColumnSpacing="{StaticResource StageColumnSpacing}"
                   SizeChanged="Stage_SizeChanged">
 
                 <!-- Slot 0 -->

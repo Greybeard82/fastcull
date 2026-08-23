@@ -18,6 +18,25 @@ namespace Fastcull.ViewModels
         public const double DefaultAspectRatio = 1.5;
 
         /// <summary>
+        /// Width of one of <paramref name="columnCount"/> equal cells across a stage of
+        /// <paramref name="stageWidth"/>, once the gaps between them are removed. There are
+        /// always one fewer gaps than columns - the classic off-by-one here silently shrinks or
+        /// overflows every photo, so it lives in one tested place rather than inline in the View.
+        /// </summary>
+        public static double ComputeCellWidth(double stageWidth, double columnSpacing, int columnCount = 3)
+        {
+            if (columnCount <= 0) return 0;
+            if (stageWidth <= 0) return 0;
+
+            var usableSpacing = columnSpacing > 0 && !double.IsNaN(columnSpacing) && !double.IsInfinity(columnSpacing)
+                ? columnSpacing
+                : 0;
+
+            var width = (stageWidth - (usableSpacing * (columnCount - 1))) / columnCount;
+            return width > 0 ? width : 0;
+        }
+
+        /// <summary>
         /// One shared height for every visible photo:
         ///
         ///     min(availableCellHeight, availableCellWidth / widestVisibleAspect)
