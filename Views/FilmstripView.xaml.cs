@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Windows.Foundation;
 using Windows.System;
 
@@ -60,6 +61,23 @@ namespace Fastcull.Views
         /// whose CollectionChanged would otherwise re-enter the computation that caused it.</summary>
         private bool _updatingStageLayout;
 
+        /// <summary>Window start at the last navigation, so the slide knows how far the set moved.</summary>
+        private int _lastWindowStart = -1;
+
+        /// <summary>The in-flight stage slide, retargeted rather than queued on rapid navigation.</summary>
+        private Storyboard? _slide;
+
+        /// <summary>
+        /// Navigation slide duration. Fast enough not to sit between the user and the next photo,
+        /// slow enough to read as movement. Declared once in Themes/Nocturne.xaml so it is
+        /// tunable in one place; the literal here is only the fallback if that lookup fails.
+        /// </summary>
+        private static double SlideMilliseconds =>
+            Application.Current?.Resources?.TryGetValue("NavigationSlideMilliseconds", out var value) == true
+            && value is double ms
+                ? ms
+                : 110;
+
         public MainViewModel ViewModel { get; } = new();
 
         public FilmstripView()
@@ -86,10 +104,23 @@ namespace Fastcull.Views
         private void StageHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateStageLayout();
 
         /// <summary>
-        /// Runs on every navigation, whatever the source. The active photo's shape can change how
-        /// many slots fit, so the stage re-measures.
+        /// Runs on every navigation, whatever the source - keyboard, a stage click or a thumbnail
+        /// click. Three things happen, in this order and none of them gating the others:
+        ///
+        ///   1. the stage re-measures, because the active photo's shape can change how many slots
+        ///      fit;
+        ///   2. the stage slides, which is decorative only;
+        ///   3. the bottom strip scrolls to keep the active thumbnail in view.
+        ///
+        /// Step 3 used to be wired to Thumbnail_Tapped alone, so arrowing through a folder left
+        /// the strip wherever it was and the active thumbnail simply drifted off screen.
         /// </summary>
-        private void OnNavigated() => UpdateStageLayout();
+        private void OnNavigated()
+        {
+            UpdateStageLayout();
+            AnimateStageSlide();
+            CenterOn(ViewModel.ActiveIndex);
+        }
 
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
@@ -271,6 +302,7 @@ namespace Fastcull.Views
             var slot = StageRepeater.GetElementIndex(element);
             if (slot < 0 || slot >= ViewModel.StageItems.Count) return;
 
+            // OnNavigated handles centring and the slide - SetActiveIndex is the only call needed.
             ViewModel.SetActiveIndex(ViewModel.StageItems[slot].Index);
         }
 
@@ -283,18 +315,108 @@ namespace Fastcull.Views
             var index = ThumbRepeater.GetElementIndex(element);
             if (index < 0) return;
 
+            // OnNavigated centres the strip now, for every navigation source rather than this one.
             ViewModel.SetActiveIndex(index);
-            CenterOn(index);
         }
 
+        /// <summary>
+        /// Scrolls the bottom strip so the active thumbnail is centred.
+        ///
+        /// ChangeView's own eased scroll is the animation here - a composition animation would be
+        /// fighting the ScrollViewer for ownership of the offset, and ChangeView already
+        /// retargets rather than queues when it is called again mid-scroll, which is exactly the
+        /// coalescing behaviour key repeat needs.
+        ///
+        /// It bails during a pointer drag: the drag path writes HorizontalOffset directly, and an
+        /// animation running against it would fight the pointer and snap back on release.
+        /// </summary>
         private void CenterOn(int index)
         {
+            if (_dragging || index < 0) return;
+
             var viewport = BottomScroll.ActualWidth;
             if (viewport <= 0) return;
 
             var itemCenter = index * (ThumbWidth + ThumbSpacing) + ThumbWidth / 2;
             var target = Math.Max(0, itemCenter - viewport / 2);
             BottomScroll.ChangeView(target, null, null, false);
+        }
+
+        // ------------------------------------------------------------------
+        // Navigation slide
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Slides the stage by one slot pitch when the window shifts.
+        ///
+        /// Purely decorative: the active index, the ratings and the whole stage layout have
+        /// already changed by the time this runs, and nothing waits for it to finish. The
+        /// container it translates paints no background, so it adds no non-black pixels
+        /// (PRD 1.10).
+        ///
+        /// Retargets rather than queues. Holding an arrow key fires navigations far faster than
+        /// the animation completes, so each one reads the offset the content is CURRENTLY drawn
+        /// at, adds the new shift to it, and animates that to zero - the slide always converges
+        /// on the settled position instead of falling behind a backlog. The accumulated offset is
+        /// clamped so a long key-hold cannot wind up an absurd distance to unwind.
+        /// </summary>
+        private void AnimateStageSlide()
+        {
+            if (ViewModel.StageItems.Count == 0) { _lastWindowStart = -1; return; }
+
+            var windowStart = ViewModel.StageItems[0].Index;
+
+            // First layout, or the window did not move (which is what happens at the sequence
+            // boundaries, where the active marker moves between slots instead).
+            if (_lastWindowStart < 0) { _lastWindowStart = windowStart; return; }
+
+            var shift = windowStart - _lastWindowStart;
+            _lastWindowStart = windowStart;
+            if (shift == 0) return;
+
+            var pitch = AverageSlotPitch();
+            if (pitch <= 0) return;
+
+            // Read the animated value BEFORE stopping, so a mid-flight retarget starts from where
+            // the content actually is rather than snapping to the base value first.
+            var current = StageSlideTransform.X;
+            _slide?.Stop();
+
+            var from = Math.Clamp(current + (shift * pitch), -2 * pitch, 2 * pitch);
+            StageSlideTransform.X = from;
+
+            var animation = new DoubleAnimation
+            {
+                From = from,
+                To = 0,
+                Duration = new Duration(TimeSpan.FromMilliseconds(SlideMilliseconds)),
+                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+                EnableDependentAnimation = true,
+            };
+
+            Storyboard.SetTarget(animation, StageSlideTransform);
+            Storyboard.SetTargetProperty(animation, "X");
+
+            _slide = new Storyboard();
+            _slide.Children.Add(animation);
+            _slide.Completed += (_, _) => StageSlideTransform.X = 0;
+            _slide.Begin();
+        }
+
+        /// <summary>
+        /// Mean slot pitch across the staged photos. Slots vary in width - that is the whole point
+        /// of the layout - so there is no single true pitch; the mean is what reads as "moved by
+        /// one" without the slide distance jumping around as shapes change.
+        /// </summary>
+        private double AverageSlotPitch()
+        {
+            var count = ViewModel.StageItems.Count;
+            if (count == 0) return 0;
+
+            var total = 0.0;
+            foreach (var item in ViewModel.StageItems) total += item.StageFrameWidth;
+
+            return (total / count) + StageStack.Spacing;
         }
 
         private void BottomScroll_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
