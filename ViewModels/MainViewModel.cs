@@ -28,18 +28,30 @@ namespace Fastcull.ViewModels
         /// <summary>Session position counter for the title bar, e.g. "1204 / 2000".</summary>
         public string PositionText => Items.Count == 0 ? string.Empty : $"{ActiveIndex + 1} / {Items.Count}";
 
-        [ObservableProperty]
-        private FilmstripItemViewModel? _slot0Item;
+        /// <summary>
+        /// The photos currently on stage, in display order. Variable length: the stage shows as
+        /// many as actually fit (PRD 1.5), which the View decides from the geometry and pushes
+        /// back through <see cref="StageSlotCount"/>.
+        /// </summary>
+        public ObservableCollection<FilmstripItemViewModel> StageItems { get; } = new();
 
-        [ObservableProperty]
-        private FilmstripItemViewModel? _slot1Item;
+        private int _stageSlotCount = 3;
 
-        [ObservableProperty]
-        private FilmstripItemViewModel? _slot2Item;
-
-        /// <summary>0, 1 or 2 - which of the three slots holds the active photo; -1 when empty.</summary>
-        [ObservableProperty]
-        private int _activeSlot = -1;
+        /// <summary>
+        /// How many slots the stage should show. Set by the View once it knows how many fit;
+        /// changing it rebuilds <see cref="StageItems"/>. Clamped to the window rule's ceiling.
+        /// </summary>
+        public int StageSlotCount
+        {
+            get => _stageSlotCount;
+            set
+            {
+                var clamped = Math.Clamp(value, 1, FilmstripWindow.MaxSlots);
+                if (clamped == _stageSlotCount) return;
+                _stageSlotCount = clamped;
+                RecomputeSlots();
+            }
+        }
 
         [ObservableProperty]
         private FilmstripItemViewModel? _activeItem;
@@ -131,21 +143,42 @@ namespace Fastcull.ViewModels
         }
 
         /// <summary>
-        /// Recomputes all three slots from ActiveIndex - never carried forward incrementally, so
-        /// the window is guaranteed correct after any jump, not just a +/-1 step (PRD 1.5, E.3).
+        /// Recomputes the whole stage window from ActiveIndex - never carried forward
+        /// incrementally, so it is guaranteed correct after any jump, not just a +/-1 step
+        /// (PRD 1.5, E.3).
+        ///
+        /// StageItems is patched in place rather than cleared and refilled: a clear would
+        /// unrealize every container in the repeater and re-realize it on the next line, which
+        /// throws away the decoded images of photos that did not actually leave the stage. Since
+        /// navigation moves the window by one, all but one item is normally common to both.
         /// </summary>
         private void RecomputeSlots()
         {
-            var window = FilmstripWindow.Compute(ActiveIndex, Items.Count);
-            ActiveSlot = window.ActiveSlot;
+            var window = FilmstripWindow.Compute(ActiveIndex, Items.Count, StageSlotCount);
 
-            Slot0Item = ItemAtOrNull(window.WindowStart + 0);
-            Slot1Item = ItemAtOrNull(window.WindowStart + 1);
-            Slot2Item = ItemAtOrNull(window.WindowStart + 2);
+            if (window.SlotCount <= 0)
+            {
+                StageItems.Clear();
+                return;
+            }
+
+            for (var slot = 0; slot < window.SlotCount; slot++)
+            {
+                var item = Items[window.WindowStart + slot];
+
+                if (slot < StageItems.Count)
+                {
+                    if (!ReferenceEquals(StageItems[slot], item)) StageItems[slot] = item;
+                }
+                else
+                {
+                    StageItems.Add(item);
+                }
+            }
+
+            while (StageItems.Count > window.SlotCount)
+                StageItems.RemoveAt(StageItems.Count - 1);
         }
-
-        private FilmstripItemViewModel? ItemAtOrNull(int index)
-            => index >= 0 && index < Items.Count ? Items[index] : null;
 
         public void MovePrevious() => SetActiveIndex(ActiveIndex - 1);
         public void MoveNext() => SetActiveIndex(ActiveIndex + 1);

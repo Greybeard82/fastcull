@@ -74,29 +74,36 @@ namespace Fastcull.Converters
             => throw new NotSupportedException();
     }
 
-    /// <summary>Accent tick above the active stage photo; nothing above the flanking two.</summary>
-    public sealed class ActiveSlotToTickBrushConverter : IValueConverter
+    // ActiveSlotToTickBrushConverter and ActiveSlotToCaptionBrushConverter lived here and keyed
+    // off MainViewModel.ActiveSlot with the slot index as a ConverterParameter. With a variable
+    // number of slots there is no fixed index to pass, and the item already knows whether it is
+    // active - so both now take that bool directly.
+
+    /// <summary>Accent tick above the active stage photo; nothing above the others.</summary>
+    public sealed class BoolToAccentBrushConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
-        {
-            if (value is not int activeSlot) return ChromelessPalette.Transparent;
-            if (parameter is null || !int.TryParse(parameter.ToString(), out var slotIndex)) return ChromelessPalette.Transparent;
-            return activeSlot == slotIndex ? ChromelessPalette.Accent : ChromelessPalette.Transparent;
-        }
+            => value is true ? ChromelessPalette.Accent : ChromelessPalette.Transparent;
 
         public object ConvertBack(object value, Type targetType, object parameter, string language)
             => throw new NotSupportedException();
     }
 
-    /// <summary>Active cell's filename brightens to accent-200; the flanking two stay neutral-600.</summary>
-    public sealed class ActiveSlotToCaptionBrushConverter : IValueConverter
+    /// <summary>Active cell's filename brightens to accent-200; the others stay neutral-600.</summary>
+    public sealed class BoolToCaptionBrushConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)
-        {
-            if (value is not int activeSlot) return ChromelessPalette.Neutral600;
-            if (parameter is null || !int.TryParse(parameter.ToString(), out var slotIndex)) return ChromelessPalette.Neutral600;
-            return activeSlot == slotIndex ? ChromelessPalette.Accent200 : ChromelessPalette.Neutral600;
-        }
+            => value is true ? ChromelessPalette.Accent200 : ChromelessPalette.Neutral600;
+
+        public object ConvertBack(object value, Type targetType, object parameter, string language)
+            => throw new NotSupportedException();
+    }
+
+    /// <summary>Shows an element only in the active slot - used for the rotate buttons.</summary>
+    public sealed class BoolToVisibilityConverter : IValueConverter
+    {
+        public object Convert(object value, Type targetType, object parameter, string language)
+            => value is true ? Visibility.Visible : Visibility.Collapsed;
 
         public object ConvertBack(object value, Type targetType, object parameter, string language)
             => throw new NotSupportedException();

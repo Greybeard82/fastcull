@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Specialized;
 using System.ComponentModel;
 using Fastcull.ViewModels;
 using Microsoft.UI.Input;
@@ -34,8 +35,14 @@ namespace Fastcull.Views
         private const double TickMarginBottom = 2;
         private const double CellSpacing = 12;
         private const double WeightBarHeight = 3;
-        private const double CaptionHeight = 14;   // 10px type, measured line box
-        private const double TickWidthFraction = 0.18;
+
+        /// <summary>
+        /// Must equal StageCaptionHeight in Themes/Nocturne.xaml. This was 14 - "10px type,
+        /// measured line box" - but the caption row also holds the rotate buttons, which are
+        /// taller than that. The layout math was therefore working from a smaller chrome height
+        /// than the markup actually reserved, making every photo slightly too tall.
+        /// </summary>
+        private const double CaptionHeight = 22;
 
         /// <summary>Vertical space in a cell that is not the photo, so the photo gets the rest.</summary>
         private const double CellChromeHeight =
@@ -49,12 +56,17 @@ namespace Fastcull.Views
         /// <summary>Items currently subscribed for AspectRatio changes, so they can be unhooked.</summary>
         private readonly List<FilmstripItemViewModel> _observedSlotItems = new();
 
+        /// <summary>Guards the count/geometry loop: committing a slot count rebuilds StageItems,
+        /// whose CollectionChanged would otherwise re-enter the computation that caused it.</summary>
+        private bool _updatingStageLayout;
+
         public MainViewModel ViewModel { get; } = new();
 
         public FilmstripView()
         {
             InitializeComponent();
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+            ViewModel.StageItems.CollectionChanged += StageItems_CollectionChanged;
         }
 
         private async void FilmstripView_Loaded(object sender, RoutedEventArgs e)
@@ -73,21 +85,28 @@ namespace Fastcull.Views
 
         private void StageHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdateStageLayout();
 
+        /// <summary>
+        /// Runs on every navigation, whatever the source. The active photo's shape can change how
+        /// many slots fit, so the stage re-measures.
+        /// </summary>
+        private void OnNavigated() => UpdateStageLayout();
+
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName is nameof(MainViewModel.Slot0Item)
-                or nameof(MainViewModel.Slot1Item)
-                or nameof(MainViewModel.Slot2Item))
-            {
-                ObserveSlotItems();
-                UpdateStageLayout();
-            }
+            if (e.PropertyName == nameof(MainViewModel.ActiveIndex))
+                OnNavigated();
+        }
+
+        private void StageItems_CollectionChanged(object? sender, NotifyCollectionChangedEventArgs e)
+        {
+            ObserveSlotItems();
+            UpdateStageLayout();
         }
 
         /// <summary>
-        /// Re-subscribes to exactly the three items currently on stage. Their AspectRatio is not
-        /// known until their display decode lands, and the shared height depends on it, so the
-        /// stage has to re-measure when it arrives.
+        /// Re-subscribes to exactly the items currently on stage. Their AspectRatio is not known
+        /// until their display decode lands, and the shared height depends on it, so the stage
+        /// has to re-measure when it arrives.
         /// </summary>
         private void ObserveSlotItems()
         {
@@ -95,7 +114,7 @@ namespace Fastcull.Views
                 item.PropertyChanged -= SlotItem_PropertyChanged;
             _observedSlotItems.Clear();
 
-            foreach (var item in new[] { ViewModel.Slot0Item, ViewModel.Slot1Item, ViewModel.Slot2Item })
+            foreach (var item in ViewModel.StageItems)
             {
                 if (item is null || _observedSlotItems.Contains(item)) continue;
                 item.PropertyChanged += SlotItem_PropertyChanged;
@@ -127,91 +146,74 @@ namespace Fastcull.Views
         /// the WIDEST visible aspect is what guarantees the widest photo still fits its cell
         /// horizontally - size by anything narrower and it overflows.
         /// </summary>
+        /// <summary>
+        /// Chooses how many photos the stage shows, then sizes them all to one shared height.
+        ///
+        /// The two are circular - the count depends on the shapes, and which shapes are on stage
+        /// depends on the count - so candidate windows are evaluated against ViewModel.Items
+        /// directly, without mutating anything, and only the winner is committed.
+        /// </summary>
         private void UpdateStageLayout()
         {
-            // Available space comes from the host, not from Stage: Stage now sizes to its own
-            // content and centres, so its ActualWidth is the photos' width, not the room they have.
+            if (_updatingStageLayout) return;
+
+            // Available space comes from the host, not from the repeater: the repeater sizes to
+            // its own content and centres, so its width is the photos' width, not the room.
             var availableWidth = StageHost.ActualWidth - StageHost.Padding.Left - StageHost.Padding.Right;
             var availableHeight = StageHost.ActualHeight - StageHost.Padding.Top - StageHost.Padding.Bottom
                                   - CellChromeHeight;
             if (availableWidth <= 0 || availableHeight <= 0) return;
 
-            var aspects = new List<double>(3);
-            foreach (var item in new[] { ViewModel.Slot0Item, ViewModel.Slot1Item, ViewModel.Slot2Item })
+            var gap = StageStack.Spacing;
+
+            _updatingStageLayout = true;
+            try
             {
-                // EffectiveAspectRatio, not AspectRatio: a quarter-turned photo presents as
-                // portrait and must be sized as portrait.
-                if (item is not null) aspects.Add(item.EffectiveAspectRatio);
+                var slots = StageLayout.ChooseSlotCount(
+                    availableWidth, availableHeight, gap, ViewModel.Items.Count, AspectsForCandidate);
+
+                if (slots <= 0) return;
+
+                // Committing the count rebuilds StageItems; the re-entrancy guard stops the
+                // resulting CollectionChanged from starting this all over again.
+                ViewModel.StageSlotCount = slots;
+
+                var aspects = new List<double>(ViewModel.StageItems.Count);
+                foreach (var item in ViewModel.StageItems) aspects.Add(item.EffectiveAspectRatio);
+                if (aspects.Count == 0) return;
+
+                var totalGaps = StageLayout.ComputeTotalGapWidth(aspects.Count, gap);
+                var sharedHeight = StageLayout.ComputeSharedHeight(
+                    availableWidth, availableHeight, totalGaps, aspects);
+                if (sharedHeight <= 0) return;
+
+                foreach (var item in ViewModel.StageItems) item.ApplyStageMetrics(sharedHeight);
+            }
+            finally
+            {
+                _updatingStageLayout = false;
             }
 
-            // Read the spacing the Grid actually applied rather than a local constant, so the
-            // arithmetic is always derived from the layout that is really on screen.
-            var totalGaps = StageLayout.ComputeTotalGapWidth(aspects.Count, Stage.ColumnSpacing);
-
-            // The rule itself lives in Fastcull.Core so it can be unit-tested against the
-            // portrait/mixed-aspect cases the all-landscape sample corpus never produces.
-            var sharedHeight = StageLayout.ComputeSharedHeight(availableWidth, availableHeight, totalGaps, aspects);
-            if (sharedHeight <= 0) return;
-
-            ApplySlot(ViewModel.Slot0Item, Slot0Frame, Slot0Image, Slot0Rotate, Slot0Tick, Slot0Bar, sharedHeight);
-            ApplySlot(ViewModel.Slot1Item, Slot1Frame, Slot1Image, Slot1Rotate, Slot1Tick, Slot1Bar, sharedHeight);
-            ApplySlot(ViewModel.Slot2Item, Slot2Frame, Slot2Image, Slot2Rotate, Slot2Tick, Slot2Bar, sharedHeight);
+            ObserveSlotItems();
         }
 
         /// <summary>
-        /// Sizes one slot's photo, tick and weight bar.
-        ///
-        /// Rotation is applied as a render transform about the image's centre, but a render
-        /// transform does not affect layout - left alone, a turned photo would still OCCUPY its
-        /// un-rotated box, overlap its neighbours, and leave the tick and bar sized to the wrong
-        /// width. So the layout box and the image are sized separately:
-        ///
-        ///   frame  - the post-rotation box: sharedHeight tall, and as wide as the rotated
-        ///            aspect makes it. This is what participates in layout, and what the tick
-        ///            (18%) and weight bar (100%) are measured against.
-        ///   image  - the PRE-rotation box, i.e. the frame with width and height swapped on a
-        ///            quarter turn. Rotating that about its centre yields a bounding box exactly
-        ///            equal to the frame, so the photo lands flush inside it, uncropped.
-        ///
-        /// Re-decoding to bake in the rotation would be the obvious alternative and is the wrong
-        /// one: it would spend a decode on a transform, blow the PRD 3.5 keypress budget, and
-        /// invalidate cache entries once PRD 3.3 exists.
+        /// Effective aspects the window would hold at a candidate slot count. Read-only: this
+        /// peeks at the window rule without committing to it.
         /// </summary>
-        private static void ApplySlot(
-            FilmstripItemViewModel? item,
-            FrameworkElement frame,
-            Image image,
-            RotateTransform rotate,
-            FrameworkElement tick,
-            FrameworkElement bar,
-            double sharedHeight)
+        private IReadOnlyList<double> AspectsForCandidate(int slots)
         {
-            if (item is null) return;
+            var window = FilmstripWindow.Compute(ViewModel.ActiveIndex, ViewModel.Items.Count, slots);
+            var result = new List<double>(Math.Max(0, window.SlotCount));
 
-            var frameWidth = StageLayout.PhotoWidth(sharedHeight, item.EffectiveAspectRatio);
-            if (frameWidth <= 0) return;
+            for (var i = 0; i < window.SlotCount; i++)
+            {
+                var index = window.WindowStart + i;
+                if (index >= 0 && index < ViewModel.Items.Count)
+                    result.Add(ViewModel.Items[index].EffectiveAspectRatio);
+            }
 
-            frame.Width = frameWidth;
-            frame.Height = sharedHeight;
-
-            var swaps = item.Rotation.SwapsAspect;
-            image.Width = swaps ? sharedHeight : frameWidth;
-            image.Height = swaps ? frameWidth : sharedHeight;
-            rotate.Angle = item.RotationAngle;
-
-            // The image lives in a Canvas, and is positioned here rather than by alignment,
-            // because a Canvas is the only panel that measures its children with infinite space.
-            // Inside an ordinary Grid, WinUI clamps a child's DesiredSize to the space available,
-            // so at 90 degrees the image's swapped width (the full shared height) was being cut
-            // down to the frame's much narrower width - measured, it rendered 206x204 instead of
-            // 206x311. Centring it here puts its rotation origin at the frame's centre, so the
-            // rotated bounding box lands exactly on the frame.
-            Canvas.SetLeft(image, (frameWidth - image.Width) / 2);
-            Canvas.SetTop(image, (sharedHeight - image.Height) / 2);
-
-            // The tick spans 18% of the photo's rendered width; the weight bar spans all of it.
-            tick.Width = Math.Max(1, frameWidth * TickWidthFraction);
-            bar.Width = Math.Max(1, frameWidth);
+            return result;
         }
 
         // ------------------------------------------------------------------
@@ -256,21 +258,20 @@ namespace Fastcull.Views
             Focus(FocusState.Programmatic);
         }
 
-        /// <summary>Clicking any of the three stage slots makes that photo active (PRD E.3).</summary>
+        /// <summary>
+        /// Clicking any stage slot makes that photo active (PRD E.3). The slot index is resolved
+        /// through the repeater rather than a Tag, because the slots are templated now and their
+        /// count varies - and ItemsRepeater does not give realized containers a DataContext under
+        /// x:Bind, so sender.DataContext would be null.
+        /// </summary>
         private void Slot_Tapped(object sender, TappedRoutedEventArgs e)
         {
-            if (sender is not FrameworkElement { Tag: string tagText }) return;
-            if (!int.TryParse(tagText, out var slot)) return;
+            if (sender is not UIElement element) return;
 
-            var item = slot switch
-            {
-                0 => ViewModel.Slot0Item,
-                1 => ViewModel.Slot1Item,
-                2 => ViewModel.Slot2Item,
-                _ => null,
-            };
+            var slot = StageRepeater.GetElementIndex(element);
+            if (slot < 0 || slot >= ViewModel.StageItems.Count) return;
 
-            if (item is not null) ViewModel.SetActiveIndex(item.Index);
+            ViewModel.SetActiveIndex(ViewModel.StageItems[slot].Index);
         }
 
         private void Thumbnail_Tapped(object sender, TappedRoutedEventArgs e)

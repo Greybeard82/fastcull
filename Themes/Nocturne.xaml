@@ -90,6 +90,17 @@
     <x:Double x:Key="StageColumnSpacing">5</x:Double>
     <Thickness x:Key="StagePadding">8,18,8,24</Thickness>
 
+    <!-- Caption row height, fixed and identical in every slot. The rotate buttons live in this
+         row and are taller than its 10px text; letting them size it made the active slot taller
+         than its neighbours, and centring it vertically then pushed that photo up by half the
+         excess. FilmstripView.xaml.cs's CaptionHeight must equal this, or the shared-height
+         computation and the markup disagree about how much room the chrome takes. -->
+    <x:Double x:Key="StageCaptionHeight">22</x:Double>
+
+    <!-- Navigation transition. Fast enough not to sit between the user and the next photo, slow
+         enough to read as movement rather than a jump cut. The state change never waits for it. -->
+    <x:Double x:Key="NavigationSlideMilliseconds">110</x:Double>
+
     <!-- ====================== Chromeless glyph button ==================
          A flat, borderless glyph button for the rotate controls.
 

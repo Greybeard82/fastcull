@@ -99,6 +99,58 @@ namespace Fastcull.ViewModels
             return total;
         }
 
+        /// <summary>
+        /// How many photos the stage should show, given the room it has and the shapes of the
+        /// photos around the cursor.
+        ///
+        /// A set only benefits from another photo while it is **height**-bound - that is, while
+        /// the shared height is clamped by the available height and the set is therefore narrower
+        /// than the space it has. Three portraits on a wide stage leave most of the width unused,
+        /// and that slack is exactly what extra photos should fill. Once width becomes the binding
+        /// constraint the set already spans the stage, and adding more only shrinks every photo,
+        /// so expansion stops there.
+        ///
+        /// Counts stay odd so the active photo has a literal centre slot (PRD 1.5), and are capped
+        /// at <see cref="FilmstripWindow.MaxSlots"/>. The cap is not cosmetic: every staged photo
+        /// holds a display-tier decode, and the 5.25 GB peak-working-set failure measured in the
+        /// followup3 benchmark is still unfixed because PRD 3.3's cache does not exist. An
+        /// uncapped rule on an ultrawide full of extreme crops would make that materially worse.
+        /// </summary>
+        /// <param name="aspectsForCount">
+        /// Given a candidate slot count, returns the effective aspect ratios the window would
+        /// contain. The window shifts with the count, so the caller resolves it per candidate.
+        /// </param>
+        public static int ChooseSlotCount(
+            double availableWidth,
+            double availableHeight,
+            double gapWidth,
+            int itemCount,
+            Func<int, IReadOnlyList<double>> aspectsForCount,
+            int minimumSlots = 3)
+        {
+            if (itemCount <= 0 || availableWidth <= 0 || availableHeight <= 0) return 0;
+
+            var ceiling = Math.Min(itemCount, FilmstripWindow.MaxSlots);
+            var chosen = Math.Min(minimumSlots, ceiling);
+
+            for (var candidate = chosen + 2; candidate <= ceiling; candidate += 2)
+            {
+                var aspects = aspectsForCount(candidate);
+                if (aspects is null || aspects.Count == 0) break;
+
+                var gaps = ComputeTotalGapWidth(candidate, gapWidth);
+                var height = ComputeSharedHeight(availableWidth, availableHeight, gaps, aspects);
+
+                // Still height-bound means the set does not yet fill the width, so one more pair
+                // of photos can be shown without making any of them smaller.
+                if (height < availableHeight) break;
+
+                chosen = candidate;
+            }
+
+            return chosen;
+        }
+
         /// <summary>Width of one photo at the shared height, from its own aspect.</summary>
         public static double PhotoWidth(double sharedHeight, double aspectRatio)
         {

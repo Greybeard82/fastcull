@@ -22,150 +22,129 @@
         that was picked from three explored looks.
     -->
     <UserControl.Resources>
-        <conv:ActiveSlotToTickBrushConverter x:Key="TickBrush"/>
-        <conv:ActiveSlotToCaptionBrushConverter x:Key="CaptionBrush"/>
         <conv:CullStateToWeightBarBrushConverter x:Key="WeightBrush"/>
         <conv:ThumbnailMarkBrushConverter x:Key="ThumbMark"/>
         <conv:BoolToThumbnailOpacityConverter x:Key="ThumbOpacity"/>
-        <conv:ItemToVisibilityConverter x:Key="ItemVisible"/>
+        <conv:BoolToAccentBrushConverter x:Key="AccentIfActive"/>
+        <conv:BoolToCaptionBrushConverter x:Key="CaptionBrush"/>
+        <conv:BoolToVisibilityConverter x:Key="VisibleIfActive"/>
     </UserControl.Resources>
 
     <Grid RowDefinitions="*,Auto" Background="{StaticResource GroundBrush}">
 
         <!-- ================================ STAGE ================================
-             Three consecutive photos (PRD 1.5), the active one centred except at the
-             sequence ends. Padding and gap are the handoff's literal values. -->
-        <!-- StageHost owns the available space; Stage sizes to its content and centres inside it.
-             Auto columns are load-bearing: with star columns each slot got a fixed third of the
-             stage whether it needed it or not, so a portrait photo sat in a landscape-sized cell
-             and the visible gap became cell-width-minus-photo-width - hundreds of pixels - while
-             ColumnSpacing sat there saying 5. Auto columns take exactly the frame width ApplySlot
-             assigns, which makes the gap literally the gap. -->
+             As many consecutive photos as actually fit (PRD 1.5), the active one centred
+             except at the sequence ends.
+
+             StageHost owns the available space; the repeater sizes to its content and
+             centres inside it. Nothing here gets a fixed share of the width: each slot is
+             exactly as wide as its photo, so the only horizontal space between photos is
+             the real spacing. With fixed thirds a portrait photo sat in a landscape-sized
+             cell and the gap became hundreds of pixels while the spacing said 5.
+
+             The count is variable, so this is a templated repeater rather than hand-written
+             slots, and every dimension is bound from the item rather than assigned to an
+             x:Name'd element - ItemsRepeater does not propagate DataContext to realized
+             containers under x:Bind, so binding is the path that works. -->
         <Border x:Name="StageHost" Grid.Row="0" Padding="{StaticResource StagePadding}"
                 SizeChanged="StageHost_SizeChanged">
-            <Grid x:Name="Stage" ColumnDefinitions="Auto,Auto,Auto"
-                  HorizontalAlignment="Center" VerticalAlignment="Center"
-                  ColumnSpacing="{StaticResource StageColumnSpacing}">
 
-                <!-- Slot 0 -->
-                <StackPanel Grid.Column="0" Tag="0" Tapped="Slot_Tapped" Spacing="12" Background="Transparent"
-                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Visibility="{x:Bind ViewModel.Slot0Item, Mode=OneWay, Converter={StaticResource ItemVisible}}">
-                    <Border x:Name="Slot0Tick" Height="2" CornerRadius="1" Margin="0,0,0,2"
-                            HorizontalAlignment="Center"
-                            Background="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource TickBrush}, ConverterParameter=0}"/>
-                    <!-- Frame is the POST-rotation layout box; the Image inside is laid out
-                         pre-rotation and turned about its centre. See ApplySlot. -->
-                    <Grid x:Name="Slot0Frame">
-                        <Canvas>
-                            <Image x:Name="Slot0Image" Stretch="Uniform"
-                                   RenderTransformOrigin="0.5,0.5"
-                                   Source="{x:Bind ViewModel.Slot0Item.DisplayImage, Mode=OneWay}">
-                                <Image.RenderTransform>
-                                    <RotateTransform x:Name="Slot0Rotate"/>
-                                </Image.RenderTransform>
-                            </Image>
-                        </Canvas>
-                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Foreground="{StaticResource RejectBrush}"
-                                   Visibility="{x:Bind ViewModel.Slot0Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
-                    </Grid>
-                    <Border x:Name="Slot0Bar" Height="3" CornerRadius="2" HorizontalAlignment="Center"
-                            Background="{x:Bind ViewModel.Slot0Item.CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
-                        <TextBlock Text="{x:Bind ViewModel.Slot0Item.DisplayName, Mode=OneWay}"
-                                   FontSize="10" CharacterSpacing="140" TextTrimming="CharacterEllipsis"
-                                   Foreground="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource CaptionBrush}, ConverterParameter=0}"/>
-                        <TextBlock Text="{x:Bind ViewModel.Slot0Item.StarString, Mode=OneWay}"
-                                   FontSize="9" CharacterSpacing="140"
-                                   Foreground="{StaticResource Accent400Brush}"/>
-                    </StackPanel>
-                </StackPanel>
+            <!-- StageSlide carries the navigation transition. It paints no background, so it
+                 adds no non-black pixels over the stage (PRD 1.10). -->
+            <Grid x:Name="StageSlide" HorizontalAlignment="Center" VerticalAlignment="Center"
+                  RenderTransformOrigin="0.5,0.5">
+                <Grid.RenderTransform>
+                    <TranslateTransform x:Name="StageSlideTransform"/>
+                </Grid.RenderTransform>
 
-                <!-- Slot 1 -->
-                <StackPanel Grid.Column="1" Tag="1" Tapped="Slot_Tapped" Spacing="12" Background="Transparent"
-                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Visibility="{x:Bind ViewModel.Slot1Item, Mode=OneWay, Converter={StaticResource ItemVisible}}">
-                    <Border x:Name="Slot1Tick" Height="2" CornerRadius="1" Margin="0,0,0,2"
-                            HorizontalAlignment="Center"
-                            Background="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource TickBrush}, ConverterParameter=1}"/>
-                    <Grid x:Name="Slot1Frame">
-                        <Canvas>
-                            <Image x:Name="Slot1Image" Stretch="Uniform"
-                                   RenderTransformOrigin="0.5,0.5"
-                                   Source="{x:Bind ViewModel.Slot1Item.DisplayImage, Mode=OneWay}">
-                                <Image.RenderTransform>
-                                    <RotateTransform x:Name="Slot1Rotate"/>
-                                </Image.RenderTransform>
-                            </Image>
-                        </Canvas>
-                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Foreground="{StaticResource RejectBrush}"
-                                   Visibility="{x:Bind ViewModel.Slot1Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
-                    </Grid>
-                    <Border x:Name="Slot1Bar" Height="3" CornerRadius="2" HorizontalAlignment="Center"
-                            Background="{x:Bind ViewModel.Slot1Item.CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
-                    <!-- The caption row stretches to the frame width (the parent StackPanel is
-                         centred and sized by its widest child, the photo frame), so the rotate
-                         buttons land at the photo's right edge while the name stays centred. -->
-                    <Grid HorizontalAlignment="Stretch">
-                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
-                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.DisplayName, Mode=OneWay}"
-                                       FontSize="10" CharacterSpacing="140" TextTrimming="CharacterEllipsis"
-                                       Foreground="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource CaptionBrush}, ConverterParameter=1}"/>
-                            <TextBlock Text="{x:Bind ViewModel.Slot1Item.StarString, Mode=OneWay}"
-                                       FontSize="9" CharacterSpacing="140"
-                                       Foreground="{StaticResource Accent400Brush}"/>
-                        </StackPanel>
+                <ItemsRepeater x:Name="StageRepeater" ItemsSource="{x:Bind ViewModel.StageItems}"
+                               IsTabStop="False" VerticalAlignment="Center">
+                    <ItemsRepeater.Layout>
+                        <StackLayout x:Name="StageStack" Orientation="Horizontal"
+                                     Spacing="{StaticResource StageColumnSpacing}"/>
+                    </ItemsRepeater.Layout>
+                    <ItemsRepeater.ItemTemplate>
+                        <DataTemplate x:DataType="vm:FilmstripItemViewModel">
+                            <StackPanel Spacing="12" Background="Transparent"
+                                        Tapped="Slot_Tapped"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center">
 
-                        <!-- Rotate controls (PRD 1.11). They sit under the centre slot always,
-                             but act on the ACTIVE item - which is a different photo at the
-                             sequence boundaries, where the active marker moves to an end slot. -->
-                        <StackPanel Orientation="Horizontal" Spacing="2"
-                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                    Tapped="RotateButtons_Tapped">
-                            <Button Style="{StaticResource ChromelessGlyphButtonStyle}"
-                                    Content="&#x21BA;" Click="RotateLeft_Click"
-                                    AutomationProperties.Name="Rotate left 90 degrees"/>
-                            <Button Style="{StaticResource ChromelessGlyphButtonStyle}"
-                                    Content="&#x21BB;" Click="RotateRight_Click"
-                                    AutomationProperties.Name="Rotate right 90 degrees"/>
-                        </StackPanel>
-                    </Grid>
-                </StackPanel>
+                                <!-- Accent tick: only above the active photo, 18% of its width. -->
+                                <Border Height="2" CornerRadius="1" Margin="0,0,0,2"
+                                        HorizontalAlignment="Center"
+                                        Width="{x:Bind StageTickWidth, Mode=OneWay}"
+                                        Background="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource AccentIfActive}}"/>
 
-                <!-- Slot 2 -->
-                <StackPanel Grid.Column="2" Tag="2" Tapped="Slot_Tapped" Spacing="12" Background="Transparent"
-                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                            Visibility="{x:Bind ViewModel.Slot2Item, Mode=OneWay, Converter={StaticResource ItemVisible}}">
-                    <Border x:Name="Slot2Tick" Height="2" CornerRadius="1" Margin="0,0,0,2"
-                            HorizontalAlignment="Center"
-                            Background="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource TickBrush}, ConverterParameter=2}"/>
-                    <Grid x:Name="Slot2Frame">
-                        <Canvas>
-                            <Image x:Name="Slot2Image" Stretch="Uniform"
-                                   RenderTransformOrigin="0.5,0.5"
-                                   Source="{x:Bind ViewModel.Slot2Item.DisplayImage, Mode=OneWay}">
-                                <Image.RenderTransform>
-                                    <RotateTransform x:Name="Slot2Rotate"/>
-                                </Image.RenderTransform>
-                            </Image>
-                        </Canvas>
-                        <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Foreground="{StaticResource RejectBrush}"
-                                   Visibility="{x:Bind ViewModel.Slot2Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
-                    </Grid>
-                    <Border x:Name="Slot2Bar" Height="3" CornerRadius="2" HorizontalAlignment="Center"
-                            Background="{x:Bind ViewModel.Slot2Item.CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
-                    <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Center">
-                        <TextBlock Text="{x:Bind ViewModel.Slot2Item.DisplayName, Mode=OneWay}"
-                                   FontSize="10" CharacterSpacing="140" TextTrimming="CharacterEllipsis"
-                                   Foreground="{x:Bind ViewModel.ActiveSlot, Mode=OneWay, Converter={StaticResource CaptionBrush}, ConverterParameter=2}"/>
-                        <TextBlock Text="{x:Bind ViewModel.Slot2Item.StarString, Mode=OneWay}"
-                                   FontSize="9" CharacterSpacing="140"
-                                   Foreground="{StaticResource Accent400Brush}"/>
-                    </StackPanel>
-                </StackPanel>
+                                <!-- Frame is the POST-rotation layout box; the Image inside is
+                                     laid out pre-rotation and turned about its centre. The Image
+                                     sits in a Canvas because every other panel clamps a child's
+                                     DesiredSize to the space available, which crushes the swapped
+                                     dimension on a quarter turn. -->
+                                <Grid Width="{x:Bind StageFrameWidth, Mode=OneWay}"
+                                      Height="{x:Bind StageFrameHeight, Mode=OneWay}">
+                                    <Canvas>
+                                        <Image Stretch="Uniform"
+                                               Source="{x:Bind DisplayImage, Mode=OneWay}"
+                                               Width="{x:Bind StageImageWidth, Mode=OneWay}"
+                                               Height="{x:Bind StageImageHeight, Mode=OneWay}"
+                                               Canvas.Left="{x:Bind StageImageLeft, Mode=OneWay}"
+                                               Canvas.Top="{x:Bind StageImageTop, Mode=OneWay}"
+                                               RenderTransformOrigin="0.5,0.5">
+                                            <Image.RenderTransform>
+                                                <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
+                                            </Image.RenderTransform>
+                                        </Image>
+                                    </Canvas>
+                                    <TextBlock Text="&#x26A0;" FontSize="24"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{StaticResource RejectBrush}"
+                                               Visibility="{x:Bind DisplayImageFailedVisibility, Mode=OneWay}"/>
+                                </Grid>
+
+                                <!-- State weight bar: the photo's full rendered width. -->
+                                <Border Height="3" CornerRadius="2" HorizontalAlignment="Center"
+                                        Width="{x:Bind StageBarWidth, Mode=OneWay}"
+                                        Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource WeightBrush}}"/>
+
+                                <!-- Caption row. Its height is FIXED and identical in every slot:
+                                     the rotate buttons are taller than the 10px caption text, so
+                                     letting them grow this row made the active slot taller than
+                                     its neighbours and, with VerticalAlignment=Center, pushed its
+                                     photo up by half the excess. CaptionHeight in the code-behind
+                                     must match StageCaptionHeight here or the shared-height
+                                     computation works from a stale number. -->
+                                <Grid HorizontalAlignment="Stretch"
+                                      Height="{StaticResource StageCaptionHeight}">
+                                    <StackPanel Orientation="Horizontal" Spacing="8"
+                                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <TextBlock Text="{x:Bind DisplayName, Mode=OneWay}"
+                                                   FontSize="10" CharacterSpacing="140"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Foreground="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource CaptionBrush}}"/>
+                                        <TextBlock Text="{x:Bind StarString, Mode=OneWay}"
+                                                   FontSize="9" CharacterSpacing="140"
+                                                   Foreground="{StaticResource Accent400Brush}"/>
+                                    </StackPanel>
+
+                                    <!-- Rotate controls (PRD 1.11). They render in the ACTIVE
+                                         slot, wherever that is - which at the first and last
+                                         photo of the sequence is an end slot, not the centre. -->
+                                    <StackPanel Orientation="Horizontal" Spacing="2"
+                                                HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                Tapped="RotateButtons_Tapped"
+                                                Visibility="{x:Bind IsActive, Mode=OneWay, Converter={StaticResource VisibleIfActive}}">
+                                        <Button Style="{StaticResource ChromelessGlyphButtonStyle}"
+                                                Content="&#x21BA;" Click="RotateLeft_Click"
+                                                AutomationProperties.Name="Rotate left 90 degrees"/>
+                                        <Button Style="{StaticResource ChromelessGlyphButtonStyle}"
+                                                Content="&#x21BB;" Click="RotateRight_Click"
+                                                AutomationProperties.Name="Rotate right 90 degrees"/>
+                                    </StackPanel>
+                                </Grid>
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsRepeater.ItemTemplate>
+                </ItemsRepeater>
             </Grid>
         </Border>
 

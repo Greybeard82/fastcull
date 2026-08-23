@@ -84,6 +84,72 @@ namespace Fastcull.ViewModels
         /// <summary>Clockwise render angle in degrees.</summary>
         public double RotationAngle => Rotation.Degrees;
 
+        // ------------------------------------------------------------------
+        // Stage geometry
+        // ------------------------------------------------------------------
+        //
+        // The stage is a templated repeater over a variable number of photos, so its geometry is
+        // exposed as bindable properties rather than assigned to x:Name'd elements from
+        // code-behind. That is not just tidiness: ItemsRepeater does not propagate DataContext to
+        // realized containers under x:Bind (the bottom strip's Thumbnail_Tapped already works
+        // around this via GetElementIndex), so reaching into realized containers by name to size
+        // them would be the fragile path. Binding is the one that works.
+        //
+        // The View computes the single shared height for the whole visible set, then pushes it
+        // through ApplyStageMetrics; every value below derives from that.
+
+        /// <summary>Post-rotation layout box: what participates in layout and what the tick and bar measure against.</summary>
+        [ObservableProperty] private double _stageFrameWidth;
+        [ObservableProperty] private double _stageFrameHeight;
+
+        /// <summary>Pre-rotation image box - the frame with width and height swapped on a quarter turn.</summary>
+        [ObservableProperty] private double _stageImageWidth;
+        [ObservableProperty] private double _stageImageHeight;
+
+        /// <summary>Canvas offsets that centre the image in its frame, so it rotates about the frame's centre.</summary>
+        [ObservableProperty] private double _stageImageLeft;
+        [ObservableProperty] private double _stageImageTop;
+
+        /// <summary>Accent tick above the active photo: 18% of the rendered width.</summary>
+        [ObservableProperty] private double _stageTickWidth;
+
+        /// <summary>State weight bar: the full rendered width.</summary>
+        [ObservableProperty] private double _stageBarWidth;
+
+        /// <summary>Fraction of the photo's rendered width the active-tick spans.</summary>
+        public const double TickWidthFraction = 0.18;
+
+        /// <summary>
+        /// Sizes this photo for the stage at the set's shared height.
+        ///
+        /// Rotation is drawn as a render transform about the image's centre, and a render
+        /// transform does not affect layout - so the layout box and the image are sized
+        /// separately. The frame takes the post-rotation shape; the image is laid out with width
+        /// and height swapped on a quarter turn, so that rotating it about its centre yields a
+        /// bounding box exactly equal to the frame. Re-decoding to bake the rotation in would
+        /// spend a decode on a transform and blow the PRD 3.5 keypress budget.
+        /// </summary>
+        public void ApplyStageMetrics(double sharedHeight)
+        {
+            if (sharedHeight <= 0) return;
+
+            var frameWidth = StageLayout.PhotoWidth(sharedHeight, EffectiveAspectRatio);
+            if (frameWidth <= 0) return;
+
+            StageFrameWidth = frameWidth;
+            StageFrameHeight = sharedHeight;
+
+            var swaps = Rotation.SwapsAspect;
+            StageImageWidth = swaps ? sharedHeight : frameWidth;
+            StageImageHeight = swaps ? frameWidth : sharedHeight;
+
+            StageImageLeft = (frameWidth - StageImageWidth) / 2;
+            StageImageTop = (sharedHeight - StageImageHeight) / 2;
+
+            StageTickWidth = Math.Max(1, frameWidth * TickWidthFraction);
+            StageBarWidth = Math.Max(1, frameWidth);
+        }
+
         /// <summary>Height of this thumbnail's slot: the active one stands 12px taller.</summary>
         public double ThumbnailSlotHeight => IsActive ? ActiveThumbnailHeight : InactiveThumbnailHeight;
 
