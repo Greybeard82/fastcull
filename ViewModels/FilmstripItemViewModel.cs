@@ -72,7 +72,10 @@ namespace Fastcull.ViewModels
         private ImageSource? _thumbnail;
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(ThumbnailFailedVisibility))]
         private bool _thumbnailFailed;
+
+        public Visibility ThumbnailFailedVisibility => ThumbnailFailed ? Visibility.Visible : Visibility.Collapsed;
 
         /// <summary>Larger "display tier" decode for the top three-slot comparison view - a
         /// separate decode from Thumbnail, never the same bitmap, per PRD 3.2.</summary>
@@ -80,7 +83,17 @@ namespace Fastcull.ViewModels
         private ImageSource? _displayImage;
 
         [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(DisplayImageFailedVisibility))]
         private bool _displayImageFailed;
+
+        /// <summary>
+        /// Exposed as a Visibility so the top slots can bind it through a nested path
+        /// (ViewModel.SlotNItem.DisplayImageFailedVisibility) rather than through a converter on
+        /// the item reference. A converter on the reference only re-evaluates when a different
+        /// item enters the slot, so a decode that fails while the photo is already on screen
+        /// would never show its placeholder. Same bug class as the star badge below.
+        /// </summary>
+        public Visibility DisplayImageFailedVisibility => DisplayImageFailed ? Visibility.Visible : Visibility.Collapsed;
 
         /// <summary>Cancels any in-flight thumbnail/display loads for this item. Safe to call even
         /// after they've completed. Cancellation is observed cooperatively between decode stages

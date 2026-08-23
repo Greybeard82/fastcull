@@ -42,22 +42,13 @@ namespace Fastcull.Converters
     }
 
     /// <summary>
-    /// Star-badge visibility for a slot. Binds the item itself rather than its Visibility
-    /// property because x:Bind does not null-propagate a value-type leaf when the root of the
-    /// path is null - an empty slot would otherwise show a badge.
+    /// Collapses a slot's chrome entirely when the slot is empty (PRD 1.5 / E.3).
+    ///
+    /// This also makes the slots' nested-path visibility bindings safe. x:Bind does not
+    /// null-propagate a value-type leaf, so ViewModel.SlotNItem.IsStarBadgeVisible yields
+    /// default(Visibility) - i.e. Visible - when the slot is empty. Because every such element
+    /// lives inside the Grid this converter governs, an empty slot renders nothing regardless.
     /// </summary>
-    public sealed class ItemToStarBadgeVisibilityConverter : IValueConverter
-    {
-        public object Convert(object value, Type targetType, object parameter, string language)
-            => value is FilmstripItemViewModel item && item.CullState.Stars >= 1
-                ? Visibility.Visible
-                : Visibility.Collapsed;
-
-        public object ConvertBack(object value, Type targetType, object parameter, string language)
-            => throw new NotSupportedException();
-    }
-
-    /// <summary>Collapses a slot's chrome entirely when the slot is empty (PRD 1.5 / E.3).</summary>
     public sealed class ItemToVisibilityConverter : IValueConverter
     {
         public object Convert(object value, Type targetType, object parameter, string language)

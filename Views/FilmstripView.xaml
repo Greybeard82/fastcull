@@ -12,11 +12,8 @@
     Loaded="FilmstripView_Loaded">
 
     <UserControl.Resources>
-        <conv:ThumbnailFailedToVisibilityConverter x:Key="ThumbFailed"/>
-        <conv:DisplayImageFailedToVisibilityConverter x:Key="DisplayFailed"/>
         <conv:ActiveSlotToBrushConverter x:Key="ActiveSlotToBrush"/>
         <conv:BoolToActiveRingBrushConverter x:Key="BoolToActiveRing"/>
-        <conv:ItemToStarBadgeVisibilityConverter x:Key="StarBadgeVisible"/>
         <conv:ItemToVisibilityConverter x:Key="ItemVisible"/>
     </UserControl.Resources>
 
@@ -38,7 +35,7 @@
                         <Image Source="{x:Bind ViewModel.Slot0Item.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
                         <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
                                    Foreground="#FFE81123"
-                                   Visibility="{x:Bind ViewModel.Slot0Item, Mode=OneWay, Converter={StaticResource DisplayFailed}}"/>
+                                   Visibility="{x:Bind ViewModel.Slot0Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
                         <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="2" Margin="10">
                             <TextBlock Text="{x:Bind ViewModel.Slot0Item.FileName, Mode=OneWay}"
                                        FontSize="12" Foreground="#FFE0E0E0" TextTrimming="CharacterEllipsis"/>
@@ -47,7 +44,7 @@
                         </StackPanel>
                         <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
                                 Background="#CC000000" CornerRadius="4" Padding="9,3"
-                                Visibility="{x:Bind ViewModel.Slot0Item, Mode=OneWay, Converter={StaticResource StarBadgeVisible}}">
+                                Visibility="{x:Bind ViewModel.Slot0Item.IsStarBadgeVisible, Mode=OneWay}">
                             <TextBlock Text="{x:Bind ViewModel.Slot0Item.StarBadgeText, Mode=OneWay}"
                                        FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
                         </Border>
@@ -64,7 +61,7 @@
                         <Image Source="{x:Bind ViewModel.Slot1Item.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
                         <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
                                    Foreground="#FFE81123"
-                                   Visibility="{x:Bind ViewModel.Slot1Item, Mode=OneWay, Converter={StaticResource DisplayFailed}}"/>
+                                   Visibility="{x:Bind ViewModel.Slot1Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
                         <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="2" Margin="10">
                             <TextBlock Text="{x:Bind ViewModel.Slot1Item.FileName, Mode=OneWay}"
                                        FontSize="12" Foreground="#FFE0E0E0" TextTrimming="CharacterEllipsis"/>
@@ -73,7 +70,7 @@
                         </StackPanel>
                         <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
                                 Background="#CC000000" CornerRadius="4" Padding="9,3"
-                                Visibility="{x:Bind ViewModel.Slot1Item, Mode=OneWay, Converter={StaticResource StarBadgeVisible}}">
+                                Visibility="{x:Bind ViewModel.Slot1Item.IsStarBadgeVisible, Mode=OneWay}">
                             <TextBlock Text="{x:Bind ViewModel.Slot1Item.StarBadgeText, Mode=OneWay}"
                                        FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
                         </Border>
@@ -90,7 +87,7 @@
                         <Image Source="{x:Bind ViewModel.Slot2Item.DisplayImage, Mode=OneWay}" Stretch="Uniform"/>
                         <TextBlock Text="&#x26A0;" FontSize="24" HorizontalAlignment="Center" VerticalAlignment="Center"
                                    Foreground="#FFE81123"
-                                   Visibility="{x:Bind ViewModel.Slot2Item, Mode=OneWay, Converter={StaticResource DisplayFailed}}"/>
+                                   Visibility="{x:Bind ViewModel.Slot2Item.DisplayImageFailedVisibility, Mode=OneWay}"/>
                         <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="2" Margin="10">
                             <TextBlock Text="{x:Bind ViewModel.Slot2Item.FileName, Mode=OneWay}"
                                        FontSize="12" Foreground="#FFE0E0E0" TextTrimming="CharacterEllipsis"/>
@@ -99,7 +96,7 @@
                         </StackPanel>
                         <Border HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="10"
                                 Background="#CC000000" CornerRadius="4" Padding="9,3"
-                                Visibility="{x:Bind ViewModel.Slot2Item, Mode=OneWay, Converter={StaticResource StarBadgeVisible}}">
+                                Visibility="{x:Bind ViewModel.Slot2Item.IsStarBadgeVisible, Mode=OneWay}">
                             <TextBlock Text="{x:Bind ViewModel.Slot2Item.StarBadgeText, Mode=OneWay}"
                                        FontSize="16" FontWeight="SemiBold" Foreground="#FFFFFFFF"/>
                         </Border>
@@ -136,7 +133,7 @@
                                     <Image Source="{x:Bind Thumbnail, Mode=OneWay}" Stretch="Uniform"/>
                                     <TextBlock Text="&#x26A0;" FontSize="16" HorizontalAlignment="Center" VerticalAlignment="Center"
                                                Foreground="#FFE81123"
-                                               Visibility="{x:Bind ThumbnailFailed, Mode=OneWay}"/>
+                                               Visibility="{x:Bind ThumbnailFailedVisibility, Mode=OneWay}"/>
                                     <StackPanel VerticalAlignment="Top" HorizontalAlignment="Left" Spacing="1" Margin="4">
                                         <TextBlock Text="{x:Bind FileName}" FontSize="10" Foreground="#FFD0D0D0"
                                                    TextTrimming="CharacterEllipsis"/>
