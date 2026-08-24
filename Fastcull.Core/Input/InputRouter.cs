@@ -1,4 +1,4 @@
-using Windows.System;
+﻿using Windows.System;
 
 namespace Fastcull.Input
 {
@@ -27,13 +27,34 @@ namespace Fastcull.Input
         RotateRight,     // 90 degrees clockwise
         RotateLeft,      // 90 degrees counter-clockwise
         ToggleZoom,
+
+        /// <summary>
+        /// PRD 2.1.1's dismiss key. Not zoom-specific despite the older name: it backs out of
+        /// whatever is topmost - the help overlay first, then zoom, then standalone fullscreen.
+        /// The priority lives in MainViewModel, because only it knows which of those are open.
+        /// </summary>
         ExitZoom,
+
+        /// <summary>
+        /// PRD 1.7.3's standalone fullscreen: the same AppWindow presenter zoom uses, without
+        /// entering zoom. Bound to Shift+Space.
+        /// </summary>
+        ToggleFullScreen,
 
         /// <summary>PRD 1.8.1's on-photo info overlay. Not the full PRD 1.8 HUD, which is unbuilt.</summary>
         ToggleInfo,
 
         /// <summary>PRD 1.1.1's folder picker - the same action as the sidebar's CHANGE FOLDER.</summary>
         OpenFolder,
+
+        /// <summary>
+        /// PRD 1.5's sidebar pin, exactly the action the panel's own pin button performs - both
+        /// call SidebarViewModel.TogglePin, so the key and the button can never disagree.
+        /// </summary>
+        ToggleSidebarPin,
+
+        /// <summary>PRD 2.1.3's keybinding help overlay.</summary>
+        ToggleHelp,
 
         /// <summary>PRD 2.1.2: move the selected photo to the Recycle Bin.</summary>
         DeletePhoto,
@@ -67,7 +88,12 @@ namespace Fastcull.Input
     /// </summary>
     public static class InputRouter
     {
-        public static ResolvedInput Resolve(VirtualKey key, bool isExtendedKey)
+        /// <param name="isShiftDown">
+        /// Shift changes exactly one binding today: Space, which zooms on its own and toggles
+        /// standalone fullscreen with Shift (PRD 1.7.3). It is defaulted so the large existing
+        /// body of two-argument callers and tests keeps compiling and keeps meaning what it did.
+        /// </param>
+        public static ResolvedInput Resolve(VirtualKey key, bool isExtendedKey, bool isShiftDown = false)
         {
             // Resolved first, before the extended/numpad split below, because every key here
             // means the same thing whichever way that bit falls - so none of them can be
@@ -116,15 +142,28 @@ namespace Fastcull.Input
                 // ---- Folder picker (PRD 1.1.1) ----
                 case VirtualKey.G: return new ResolvedInput(AppCommand.OpenFolder, 0);
 
-                // ---- Zoom ----
+                // ---- Sidebar pin (PRD 1.5) and the help overlay (PRD 2.1.3) ----
+                case VirtualKey.V: return new ResolvedInput(AppCommand.ToggleSidebarPin, 0);
+                case VirtualKey.H: return new ResolvedInput(AppCommand.ToggleHelp, 0);
+
+                // ---- Zoom and fullscreen ----
                 //
-                // Space toggles both ways; Escape only ever exits. That asymmetry is the point of
-                // having both: Escape can be hit reflexively without any risk of being the key
-                // that puts you INTO zoom. ExitZoom is a no-op when not zoomed.
-                case VirtualKey.Space: return new ResolvedInput(AppCommand.ToggleZoom, 0);
+                // Space toggles zoom both ways; Shift+Space toggles standalone fullscreen without
+                // entering zoom (PRD 1.7.3). They share a key because they are the same gesture at
+                // two scopes - make the photo bigger, make the window bigger - and the modifier is
+                // what keeps them one keypress apart rather than two keys to remember.
+                //
+                // Escape only ever dismisses. That asymmetry is the point of having both: Escape
+                // can be hit reflexively without any risk of being the key that puts you INTO
+                // zoom, and it is a no-op when there is nothing open to back out of.
+                case VirtualKey.Space:
+                    return isShiftDown
+                        ? new ResolvedInput(AppCommand.ToggleFullScreen, 0)
+                        : new ResolvedInput(AppCommand.ToggleZoom, 0);
+
                 case VirtualKey.Escape: return new ResolvedInput(AppCommand.ExitZoom, 0);
 
-                // ---- Recycle Bin (PRD 2.1.2) ----
+                // ---- Recycle Bin (PRD 2.1.3) ----
                 case VirtualKey.Delete: return new ResolvedInput(AppCommand.DeletePhoto, 0);
             }
 

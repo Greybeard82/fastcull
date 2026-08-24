@@ -95,34 +95,183 @@ namespace Fastcull
 
         private void ViewModel_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(ViewModels.MainViewModel.IsZoomed))
-                ApplyFullScreen(Filmstrip.ViewModel.IsZoomed);
+            var vm = Filmstrip.ViewModel;
+
+            switch (e.PropertyName)
+            {
+                // Two independent reasons to be fullscreen, one window state. Deriving it from
+                // both is what lets zoom come and go inside standalone fullscreen without the
+                // window changing at all (PRD 1.7.3).
+                case nameof(ViewModels.MainViewModel.IsZoomed):
+                case nameof(ViewModels.MainViewModel.IsFullScreen):
+                    ApplyFullScreen(vm.IsZoomed || vm.IsFullScreen);
+                    break;
+
+                case nameof(ViewModels.MainViewModel.IsHelpVisible):
+                    HelpOverlay.Visibility = vm.IsHelpVisible ? Visibility.Visible : Visibility.Collapsed;
+                    break;
+            }
         }
 
+        /// <summary>Whether the FullScreen presenter is currently applied.</summary>
+        private bool _isFullScreenApplied;
+
         /// <summary>
-        /// Puts the window into real fullscreen for zoom, and back afterwards.
+        /// Puts the window into real fullscreen, and back afterwards. Driven by zoom (PRD 1.7) and
+        /// by standalone fullscreen (PRD 1.7.3) alike - it takes the combined answer, not a
+        /// reason, which is what makes the two compose instead of fighting.
         ///
-        /// The FullScreen presenter is what removes the system chrome and lets the taskbar
-        /// auto-hide; our own title-bar strip collapses separately via its binding, because it is
-        /// drawn by the app rather than the system. Returning to the Default (overlapped)
-        /// presenter restores the window's previous size and position - the presenter remembers
-        /// them, so nothing needs saving here.
+        /// **Idempotent on purpose.** Pressing Space to zoom while already in standalone
+        /// fullscreen asks for fullscreen a second time; without this guard that would be a real
+        /// presenter round-trip, and the window would visibly flinch for no reason.
+        ///
+        /// The FullScreen presenter is what removes the system chrome and hides the taskbar; our
+        /// own title-bar strip collapses separately, because it is drawn by the app rather than
+        /// the system.
         /// </summary>
         private void ApplyFullScreen(bool fullScreen)
         {
+            if (fullScreen == _isFullScreenApplied) return;
+
             try
             {
                 TitleBarDragRegion.Visibility = fullScreen ? Visibility.Collapsed : Visibility.Visible;
 
+                // Seeded on the way in, put back on the way out - once per fullscreen cycle, not
+                // once per transition. While fullscreen there is no title bar to un-maximize from,
+                // so nothing can observe the seeded value in between.
+                if (fullScreen) SeedRestoreRect();
+
                 AppWindow.SetPresenter(fullScreen
                     ? AppWindowPresenterKind.FullScreen
                     : AppWindowPresenterKind.Default);
+
+                if (!fullScreen) RestoreSavedRect();
+
+                _isFullScreenApplied = fullScreen;
             }
             catch (Exception ex)
             {
                 // A presenter change is cosmetic; never let it take the app down mid-cull.
                 System.Diagnostics.Debug.WriteLine($"[FastCull] Presenter change failed: {ex}");
             }
+        }
+
+        // ------------------------------------------------------------------
+        // Fullscreen transition flicker (PRD 1.7.4)
+        // ------------------------------------------------------------------
+
+        private const int SW_SHOWMAXIMIZED = 3;
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool SetWindowPlacement(IntPtr hWnd, ref WINDOWPLACEMENT lpwndpl);
+
+        [System.Runtime.InteropServices.DllImport("user32.dll")]
+        private static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+        /// <summary>Win32 RECT: left/top/right/bottom, NOT x/y/width/height.</summary>
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct RECT { public int Left, Top, Right, Bottom; }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct POINT { public int X, Y; }
+
+        /// <summary>
+        /// Uses the local RECT above rather than System.Drawing.Rectangle. They are both four ints
+        /// and marshal without complaint, but Rectangle means {X, Y, Width, Height} while RECT
+        /// means {Left, Top, Right, Bottom} - so substituting one silently writes a rectangle
+        /// whose right and bottom edges are a width and a height. That mistake made this very fix
+        /// produce a *worse* flicker than the bug it was meant to remove.
+        /// </summary>
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct WINDOWPLACEMENT
+        {
+            public int length, flags, showCmd;
+            public POINT ptMinPosition, ptMaxPosition;
+            public RECT rcNormalPosition;
+        }
+
+        /// <summary>The window's real restore rectangle, held while the seeded one is in place.</summary>
+        private RECT? _savedNormalRect;
+
+        /// <summary>
+        /// Makes a maximized window's fullscreen transition a single visible step instead of two.
+        ///
+        /// **The measured problem.** Sampling GetWindowRect and GetWindowPlacement at ~1 ms while
+        /// pressing Escape out of zoom, on a maximized window over a 3440x1440 monitor:
+        ///
+        ///     t+0.0 ms   Escape
+        ///     t+89.7 ms  NORMAL      2580x1023   &lt;-- the restored rect, briefly on screen
+        ///     t+103.2 ms MAXIMIZED   2580x1023
+        ///     t+104.0 ms MAXIMIZED   3456x1408
+        ///
+        /// The window really does visit its restored size for ~13.5 ms - about one frame at 60 Hz,
+        /// and proportionally longer wherever the compositor is slower, which is why it was
+        /// noticed on a second, slower machine and not the first. Entering zoom did the same for
+        /// ~9.5 ms. Nothing in this file asks for that: SetPresenter restores the window and then
+        /// re-maximizes it, and both steps are separately visible.
+        ///
+        /// **The fix.** The intermediate frame is the window being moved to its stored "restore"
+        /// rectangle, so point that rectangle at the geometry the window is about to occupy. The
+        /// restore step then lands exactly where the maximize step would have put it, and there is
+        /// nothing to see.
+        ///
+        /// Deliberately does nothing unless the window is maximized: an ordinary windowed size has
+        /// no maximize step after the restore, so it never had a second frame to begin with, and
+        /// rewriting its restore rectangle would throw away the user's window size for no gain.
+        /// </summary>
+        private void SeedRestoreRect()
+        {
+            _savedNormalRect = null;
+
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+            var placement = new WINDOWPLACEMENT
+            {
+                length = System.Runtime.InteropServices.Marshal.SizeOf<WINDOWPLACEMENT>()
+            };
+
+            if (!GetWindowPlacement(hwnd, ref placement)) return;
+            if (placement.showCmd != SW_SHOWMAXIMIZED) return;
+            if (!GetWindowRect(hwnd, out var current)) return;
+
+            _savedNormalRect = placement.rcNormalPosition;
+
+            // Where the window sits right now, which is where the transition will land it. Read
+            // from the live window rather than computed from monitor metrics, so the few pixels a
+            // maximized window overhangs its monitor by are already accounted for.
+            placement.rcNormalPosition = current;
+            SetWindowPlacement(hwnd, ref placement);
+        }
+
+        /// <summary>
+        /// Puts the user's real restore rectangle back, once the window is out of fullscreen and
+        /// maximized again - at which point it is not sitting on that rectangle, so the write is
+        /// invisible. Un-maximizing later still returns the window to the size the user chose.
+        /// </summary>
+        private void RestoreSavedRect()
+        {
+            if (_savedNormalRect is not { } saved) return;
+            _savedNormalRect = null;
+
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
+
+            // Re-read rather than reusing the placement captured on the way in: the window's state
+            // has changed since, and writing a stale showCmd back would undo the transition that
+            // just happened. Only the restore rectangle is ours to put back.
+            var now = new WINDOWPLACEMENT
+            {
+                length = System.Runtime.InteropServices.Marshal.SizeOf<WINDOWPLACEMENT>()
+            };
+
+            if (!GetWindowPlacement(hwnd, ref now)) return;
+            if (now.showCmd != SW_SHOWMAXIMIZED) return;
+
+            now.rcNormalPosition = saved;
+            SetWindowPlacement(hwnd, ref now);
         }
 
         /// <summary>
@@ -217,9 +366,24 @@ namespace Fastcull
         /// XY-focus navigation - which is exactly why handling KeyDown on the UserControl
         /// previously failed once focus moved into the filmstrip.
         /// </summary>
+        /// <summary>
+        /// Whether either Shift key is physically down right now.
+        ///
+        /// KeyRoutedEventArgs carries no modifier state, and a Window has no CoreWindow to ask, so
+        /// this goes to the input source directly. Shift arrives as its own KeyDown first, which
+        /// resolves to None and is ignored - only the Space that follows it sees this as true.
+        /// </summary>
+        private static bool IsShiftDown()
+        {
+            const Windows.UI.Core.CoreVirtualKeyStates down = Windows.UI.Core.CoreVirtualKeyStates.Down;
+
+            return Microsoft.UI.Input.InputKeyboardSource
+                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(down);
+        }
+
         private void RootGrid_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
-            var resolved = InputRouter.Resolve(e.Key, e.KeyStatus.IsExtendedKey);
+            var resolved = InputRouter.Resolve(e.Key, e.KeyStatus.IsExtendedKey, IsShiftDown());
 
             if (resolved.Command == AppCommand.None)
             {

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Window
     x:Class="Fastcull.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -77,6 +77,13 @@
 
                 <views:SidebarView x:Name="SidebarPanel" Visibility="Collapsed"/>
             </Grid>
+
+            <!-- Keybinding help (PRD 2.1.3). Spans both columns and sits above the sidebar so it
+                 is never half-covered by a pinned panel. It is non-blocking - the control itself
+                 sets IsHitTestVisible="False" - so everything underneath keeps taking input while
+                 it is open. -->
+            <views:HelpOverlayView x:Name="HelpOverlay" Grid.Column="0" Grid.ColumnSpan="2"
+                                   Visibility="Collapsed"/>
         </Grid>
     </Grid>
 </Window>

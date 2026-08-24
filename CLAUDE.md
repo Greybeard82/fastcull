@@ -45,7 +45,10 @@ Ask before starting any of those; several are explicitly later phases in PRD 6.
 
 ## Working rules
 
-- One task at a time. Build must pass (`dotnet build`) before moving to the next.
+- One task at a time. Build must pass (`dotnet build -p:Platform=x64`) before moving to the next.
+  The `-p:Platform=x64` is required, not optional: a bare `dotnet build` defaults Platform to
+  AnyCPU and fails with "Packaged .NET applications with an app host exe cannot be
+  ProcessorArchitecture neutral".
 - After each task: confirm the build succeeds, then commit with a clear message.
 - Stage commits **by explicit path**. Never `git add -A`.
 - Do not add NuGet packages not listed in PRD section 5.2 without asking first.

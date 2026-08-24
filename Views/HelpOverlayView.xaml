@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Fastcull.Views.HelpOverlayView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d">
+
+    <!-- IsHitTestVisible="False" on the whole control is what makes this non-blocking: the
+         overlay is drawn over the stage but the pointer goes straight through it, so a photo
+         underneath can still be clicked and the filmstrip still scrolls while the list is up.
+         Keyboard is unaffected either way - it is handled at window level, not here. -->
+
+    <!-- PRD 1.10: every non-photograph pixel is exactly #FF000000. That rules out the usual
+         translucent scrim over the photo, so the card is solid black with a hairline border and
+         the photo is simply covered rather than dimmed. -->
+    <Grid Background="Transparent" IsHitTestVisible="False">
+        <Border x:Name="Card"
+                HorizontalAlignment="Center" VerticalAlignment="Center"
+                Background="#FF000000"
+                BorderBrush="{StaticResource Neutral700Brush}"
+                BorderThickness="1"
+                Padding="28,22,28,24">
+            <StackPanel>
+                <TextBlock Text="KEYS" FontSize="10" CharacterSpacing="160"
+                           FontFamily="{StaticResource UiFontFamily}"
+                           Foreground="{StaticResource Neutral700Brush}"
+                           Margin="0,0,0,16"/>
+
+                <!-- Filled in code-behind from KeyBindingCatalog. -->
+                <ItemsControl x:Name="SectionHost"/>
+
+                <TextBlock x:Name="Footer" FontSize="10"
+                           FontFamily="{StaticResource UiFontFamily}"
+                           Foreground="{StaticResource Neutral700Brush}"
+                           Margin="0,16,0,0"/>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

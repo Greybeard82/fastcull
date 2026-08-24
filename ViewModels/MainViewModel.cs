@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
@@ -82,6 +82,61 @@ namespace Fastcull.ViewModels
                 OnPropertyChanged(nameof(IsZoomed));
                 OnPropertyChanged(nameof(FilmstripBandVisibility));
             }
+        }
+
+        private bool _isFullScreen;
+
+        /// <summary>
+        /// PRD 1.7.3's standalone fullscreen: the window loses the taskbar and its own title bar,
+        /// but nothing else changes - the stage still shows its 3-9 slots, the sidebar still
+        /// reveals, the filmstrip still scrolls. It is more room, not a different mode.
+        ///
+        /// Deliberately independent of <see cref="IsZoomed"/> rather than folded into it. The
+        /// window is fullscreen when *either* is set, so zooming from standalone fullscreen and
+        /// then leaving zoom returns to standalone fullscreen rather than to a window - which is
+        /// what makes Space usable while already fullscreen instead of fighting it.
+        /// </summary>
+        public bool IsFullScreen
+        {
+            get => _isFullScreen;
+            set
+            {
+                if (_isFullScreen == value) return;
+                _isFullScreen = value;
+                OnPropertyChanged(nameof(IsFullScreen));
+            }
+        }
+
+        private bool _isHelpVisible;
+
+        /// <summary>
+        /// PRD 2.1.3's keybinding overlay. Session-only and non-blocking: it is drawn over the
+        /// stage but takes no pointer input and swallows no keys, so a binding can be tried while
+        /// it is still on screen.
+        /// </summary>
+        public bool IsHelpVisible
+        {
+            get => _isHelpVisible;
+            set
+            {
+                if (_isHelpVisible == value) return;
+                _isHelpVisible = value;
+                OnPropertyChanged(nameof(IsHelpVisible));
+            }
+        }
+
+        /// <summary>
+        /// Escape backs out of one thing at a time, topmost first (PRD 2.1.1). Returns true if it
+        /// consumed something, which keeps the ordering honest: each press dismisses exactly one
+        /// layer, so Escape from a zoomed photo inside standalone fullscreen takes two presses and
+        /// never drops both at once.
+        /// </summary>
+        public bool DismissTopmost()
+        {
+            if (IsHelpVisible) { IsHelpVisible = false; return true; }
+            if (IsZoomed) { IsZoomed = false; return true; }
+            if (IsFullScreen) { IsFullScreen = false; return true; }
+            return false;
         }
 
         /// <summary>
@@ -387,7 +442,7 @@ namespace Fastcull.ViewModels
         /// <paramref name="force"/> re-points at the index even when it has not changed.
         ///
         /// Needed because the no-op guard below identifies a photo by its POSITION, which is only
-        /// safe while the sequence is stable. A delete (PRD 2.1.2) puts a different photo at the
+        /// safe while the sequence is stable. A delete (PRD 2.1.3) puts a different photo at the
         /// same index, and without this the guard would skip the update: measured, the sidebar's
         /// Active Photo panel kept showing the deleted photo's metadata after it was gone.
         /// </summary>
@@ -532,9 +587,19 @@ namespace Fastcull.ViewModels
                 case AppCommand.RotateLeft: RotateActiveLeft(); break;
 
                 case AppCommand.ToggleZoom: IsZoomed = !IsZoomed; break;
-                case AppCommand.ExitZoom: IsZoomed = false; break;
+
+                // Not "IsZoomed = false" any more: Escape dismisses whatever is topmost, and the
+                // help overlay and standalone fullscreen are both things it can back out of.
+                case AppCommand.ExitZoom: DismissTopmost(); break;
+
+                case AppCommand.ToggleFullScreen: IsFullScreen = !IsFullScreen; break;
 
                 case AppCommand.ToggleInfo: IsInfoVisible = !IsInfoVisible; break;
+                case AppCommand.ToggleHelp: IsHelpVisible = !IsHelpVisible; break;
+
+                // The identical call the sidebar's own pin button makes, so the key and the
+                // button cannot drift apart (PRD 1.5).
+                case AppCommand.ToggleSidebarPin: Sidebar.TogglePin(); break;
 
                 // Routed through the sidebar's existing request rather than opening a picker here:
                 // the picker needs a window handle, FilmstripView already listens for that event,

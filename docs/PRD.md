@@ -303,7 +303,43 @@ The mouse wheel is overloaded, and the boundary is **which region the pointer is
 - **Independent of the `I` toggle.** This is deliberate and is the point of listing it separately: `I` governs *photo metadata* — facts about the file — while the zoom percentage is *view state*, a fact about where the app currently is. Those are different kinds of information and the user should not have to turn on a metadata overlay to find out how far they have zoomed. It shows whether `I` is on or off.
 - **Updates live** as the wheel turns, in step with the scale itself.
 
+#### 1.7.3 Standalone fullscreen — more room, not a different mode
+
+`Shift`+`Space` puts the window into fullscreen **without entering zoom**: the OS taskbar and the app's own title-bar strip both disappear, and nothing else changes. The stage still shows its 3–9 slots, the sidebar still reveals and pins, the bottom filmstrip still scrolls and still selects. It is the same `AppWindowPresenterKind.FullScreen` that zoom already uses — the same mechanism, decoupled from the photo.
+
+**Zoom and standalone fullscreen are independent flags over one window state.** The window is fullscreen when **either** is set:
+
+| `IsFullScreen` | `IsZoomed` | Window | Stage |
+| :--- | :--- | :--- | :--- |
+| off | off | Windowed | 3–9 slots |
+| **on** | off | Fullscreen | 3–9 slots |
+| off | **on** | Fullscreen | One photo |
+| **on** | **on** | Fullscreen | One photo |
+
+This is what makes the two compose instead of fight. Pressing `Space` to zoom while already in standalone fullscreen asks for a window state the window is *already in*, so the presenter is not touched at all — the photo zooms and the window does not move. Leaving zoom then returns to standalone fullscreen rather than to a window, because `IsFullScreen` was never cleared. The guard is a plain "is this already applied" check on the presenter, so a redundant request costs nothing rather than causing a visible round-trip.
+
+**Escape dismisses one layer at a time**, topmost first: the help overlay (§2.1.2), then zoom, then standalone fullscreen. Escaping out of a zoomed photo inside fullscreen therefore takes two presses and never drops both at once — each press undoes exactly one thing, which is what makes the key predictable rather than a general "get me out of here".
+
+#### 1.7.4 The fullscreen transition is one visible step, not two
+
+Entering or leaving fullscreen from a **maximized** window used to flash the window at its restored size first. Measured by sampling `GetWindowRect` and `GetWindowPlacement` at ~1 ms during an Escape out of zoom, maximized on a 3440×1440 monitor:
+
+| t | State | Size |
+| :--- | :--- | :--- |
+| +0 ms | `Escape` | |
+| +89.7 ms | `NORMAL` | **2580×1023** ← restored rect, on screen |
+| +103.2 ms | `MAXIMIZED` | 2580×1023 |
+| +104.0 ms | `MAXIMIZED` | 3456×1408 |
+
+The window genuinely visits its restored size for ~13.5 ms — roughly one frame at 60 Hz, and proportionally longer wherever the compositor is slower, which is why it was reported from a second, slower machine rather than the first. Entering zoom did the same for ~9.5 ms. Nothing in the app asked for it: `SetPresenter` restores the window and *then* re-maximizes it, and both steps are separately visible.
+
+**The fix points the restore rectangle at the destination.** Before the presenter change, the window's stored "restore" rectangle is set to the geometry the window currently occupies; the restore step then lands exactly where the maximize step would have put it, and there is nothing to see. The real restore rectangle is put back immediately afterwards, while the window is maximized and therefore not sitting on it — so un-maximizing later still returns the window to the size the user chose.
+
+This applies **only when the window is maximized**. An ordinary windowed size has no maximize step after the restore, so it never had a second frame; rewriting its restore rectangle would throw away the user's window size for no gain.
+
 ### 1.8 Metadata HUD
+
+> **Not to be confused with the keybinding help overlay** (`H`), which is documented at §2.1.3. This section is about *the photo* — camera, exposure, timestamp. That one is about *the app* — which key does what. They are separate overlays with separate toggles, and neither implies the other.
 
 **Full design (not yet built).** Toggled by `I`. Renders as a transparent overlay: `Filename`, `Format`, `Model`, `Lens`, `ISO`, `Shutter`, `Aperture`, `Focal Length`, `Timestamp` (with its source tier from 1.3), `Dimensions`, `File Size`, and the current display tier so you always know whether you are looking at real pixels.
 
@@ -400,8 +436,11 @@ The organising idea is that the two axes a cull actually uses — **which photo*
 | `T` | Jump to the **last** photo in the sequence |
 | `F` | Toggle the on-photo info overlay (§1.8.1) |
 | `G` | Open the folder picker (§1.1.1) — the same action as the sidebar's **CHANGE FOLDER** control |
+| `V` | Pin / unpin the sidebar (§1.5) — the same action as the panel's own pin button |
+| `H` | Toggle the keybinding help overlay (§2.1.2) |
 | `Space` | Toggle zoom mode (§1.7) — enters **and** exits |
-| `Esc` | Exit zoom. **Exit only** — pressing it outside zoom does nothing, so it can never be the key that puts you into zoom by accident |
+| `Shift`+`Space` | Toggle **standalone fullscreen** (§1.7.3) — hides the taskbar and title bar without entering zoom |
+| `Esc` | **Dismiss the topmost thing**: the help overlay, then zoom, then standalone fullscreen. Dismiss only — pressing it with nothing open does nothing, so it can never be the key that puts you *into* zoom by accident |
 | `Delete` | Move the selected photo to the **Recycle Bin** (§2.1.2) |
 | `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
 | `Left` / `Right` | Previous / next photo — arrow-key equivalents of `A` / `D` |
@@ -449,7 +488,27 @@ The jump keys sit together under the left hand on the bottom row, within the sam
 | `S` (old) | Rotate clockwise | `E` |
 | `Home` / `End` | First / last photo | `R` / `T` |
 
-**`Esc` returned, as an exit only.** `Space` toggles zoom in both directions; `Esc` only ever leaves it. Pressing `Esc` outside zoom does nothing at all, so the key can never be what puts you *into* zoom — which is the asymmetry that makes it safe to hit reflexively.
+**`Esc` returned, as a dismiss only.** `Space` toggles zoom in both directions; `Esc` only ever backs out. Pressing `Esc` with nothing open does nothing at all, so the key can never be what puts you *into* zoom — which is the asymmetry that makes it safe to hit reflexively.
+
+`Esc` now has three things it can dismiss, and it takes them **one press at a time, topmost first**:
+
+| Order | Dismisses | Because |
+| :--- | :--- | :--- |
+| 1 | The help overlay (§2.1.3) | It is drawn over everything else, so it is what "back out" most obviously means while it is up |
+| 2 | Zoom (§1.7) | The pre-existing behaviour, unchanged whenever nothing is layered above it |
+| 3 | Standalone fullscreen (§1.7.3) | The outermost state, and the last thing left to leave |
+
+One layer per press is the whole design. Escaping out of a zoomed photo inside standalone fullscreen takes two presses and never collapses both at once, so the key stays predictable instead of becoming a general "get me out of here" whose result depends on how many things happened to be open.
+
+**Three keys added alongside the jump keys:**
+
+| Key | Action | Notes |
+| :--- | :--- | :--- |
+| `V` | Pin / unpin the sidebar | Calls the *same* `TogglePin()` the panel's pin button calls, so the key and the button cannot drift apart |
+| `H` | Keybinding help overlay | §2.1.3 |
+| `Shift`+`Space` | Standalone fullscreen | §1.7.3 — shares a key with zoom because they are the same gesture at two scopes |
+
+`V` and `H` sit on the bottom and home rows respectively, both within reach of a hand resting on `WASD`.
 
 **The one loss that remains:** there is still no way to strip stars from a photo while keeping it `Picked`. `C` does it by resetting to rung 2, which is the same end state, so this only matters if "picked, no stars" and "picked, stars cleared" ever need to be distinguished — today they do not.
 
@@ -464,6 +523,23 @@ The jump keys sit together under the left hand on the bottom row, within the sam
 **Undo does not cover this.** §1.9's undo stack is unbuilt, so within the app the deletion is final; recovery is through the Windows Recycle Bin. That gap is the reason this is a Recycle Bin move and not a permanent delete, and it is why the Recycle Bin's own restore is currently the only undo that exists.
 
 **Companion grouping does not apply yet.** §1.4's RAW+JPEG pairing is unimplemented, so `Delete` removes exactly the selected file. On a card where a RAW and its JPEG are separate sequence entries, each must be deleted separately — the PRD's original "move file **group**" wording describes the intended behaviour once pairing exists, not what ships today.
+
+#### 2.1.3 Keybinding help overlay
+
+`H` toggles a list of the current key bindings over the stage. `Esc` also closes it (§2.1.1's dismiss order puts it first).
+
+**It is generated from the router, not written by hand.** The rows are produced by resolving every `VirtualKey` through `InputRouter` and collecting what comes back, so a binding added, moved, or removed shows up in the overlay without anyone editing a second list. A hand-maintained copy of the table in §2.1.1 would fall behind the first time a binding changed — and would do it silently, which is worse than shipping no help at all.
+
+Two things are genuinely authored, because they cannot be read off a switch statement, and both are pinned by tests so they cannot quietly fall behind either:
+
+- **The wording of each action.** A new `AppCommand` fails the build's test run until it is given a description.
+- **Which section each action appears in, and the order of sections.** A newly bound key fails until it is either shown or explicitly listed as hidden.
+
+The only deliberately hidden keys are the five numpad digits as they arrive with NumLock **off** — `End`, `Down`, `PageDown`, `Left`, `Clear`. Those are the same physical keys as `NumPad1`–`NumPad5`, which the overlay already lists; showing `End` beside "set 1 star" would name a key the user cannot find. The genuine grey `Left` and `Down` arrows still appear, since they are the same keycodes with the extended bit set.
+
+**Non-blocking, not modal.** The overlay takes no pointer input (`IsHitTestVisible="False"`) and swallows no keys — keyboard is handled at window level and never reaches it. Everything underneath keeps working while it is open, which is the point: the reason to look a binding up is to then press it, and a modal list would have to be dismissed first.
+
+Per §1.10 the card is **solid** `#FF000000` with a hairline border, not a translucent scrim — a dimmed photo showing through would put non-black, non-photograph pixels on screen.
 
 ### 2.2 Zoom Mode
 

@@ -259,6 +259,60 @@ public class InputRouterTests
         Assert.NotEqual(AppCommand.ToggleZoom, InputRouter.Resolve(VirtualKey.Escape, false).Command);
     }
 
+    // ---- Shift+Space: standalone fullscreen ----
+
+    [Fact]
+    public void ShiftSpaceTogglesStandaloneFullScreen()
+    {
+        foreach (var extended in new[] { true, false })
+            Assert.Equal(AppCommand.ToggleFullScreen,
+                InputRouter.Resolve(VirtualKey.Space, extended, isShiftDown: true).Command);
+    }
+
+    [Fact]
+    public void SpaceWithoutShiftIsStillZoomAndNeverFullScreen()
+    {
+        // The two live on one key, so the modifier is the only thing keeping them apart. If this
+        // ever inverted, every zoom would resize the window instead.
+        foreach (var extended in new[] { true, false })
+            Assert.Equal(AppCommand.ToggleZoom,
+                InputRouter.Resolve(VirtualKey.Space, extended, isShiftDown: false).Command);
+    }
+
+    [Fact]
+    public void ShiftChangesNothingExceptSpace()
+    {
+        // Holding Shift while rating or navigating must not silently mean something else - a
+        // caps-locked hand on WASD should still cull. Space is the one documented exception.
+        foreach (var key in System.Enum.GetValues<VirtualKey>())
+        {
+            if (key == VirtualKey.Space) continue;
+
+            foreach (var extended in new[] { true, false })
+            {
+                Assert.Equal(
+                    InputRouter.Resolve(key, extended, isShiftDown: false),
+                    InputRouter.Resolve(key, extended, isShiftDown: true));
+            }
+        }
+    }
+
+    [Fact]
+    public void TheDefaultOverloadMeansShiftIsNotHeld()
+        => Assert.Equal(
+            InputRouter.Resolve(VirtualKey.Space, false, isShiftDown: false),
+            InputRouter.Resolve(VirtualKey.Space, false));
+
+    // ---- Sidebar pin and help ----
+
+    [Fact]
+    public void VTogglesTheSidebarPin()
+        => AssertResolvesEitherWay(VirtualKey.V, AppCommand.ToggleSidebarPin);
+
+    [Fact]
+    public void HTogglesTheHelpOverlay()
+        => AssertResolvesEitherWay(VirtualKey.H, AppCommand.ToggleHelp);
+
     [Fact]
     public void SpaceAndEscapeAreNotTheSameCommand()
         => Assert.NotEqual(
