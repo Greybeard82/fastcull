@@ -865,14 +865,47 @@ Sorting in place under the source root, rather than into a target the user picks
 
 **Unrated photos are never touched**, not even to be counted into a folder. They stay exactly where they are so the next session finds them.
 
-### 4.4 File Operation Rules
-- **Companion files always travel with their item.** The group moves or nothing moves. In Paired mode this means a RAW+JPEG pair lands together in one bucket.
-- **Collision policy:** two cards can both contain `DSC_0001.ARW`. The relative path from the scan root is preserved inside the destination bucket, so `CardA/DSC_0001.ARW` becomes `/Picked/CardA/DSC_0001.ARW`. Nothing is ever silently overwritten.
-- **Same-basename, different-extension collisions** (`shot.jpg` and `shot.png` from different folders) are covered by the same relative-path rule.
-- **Cross-volume moves** are copy, verify, then delete. Verification is size plus modified-time by default, with an optional hash mode in settings.
-- The batch runs on a background queue with a real progress bar, a working **Cancel** button, and a plain-text log at `%LOCALAPPDATA%\FastCull\logs\`.
-- **Partial failure leaves sources intact** and reports affected files. The app never ends up in a state where photos exist in neither place.
-- Free disk space is checked before the operation starts, not discovered halfway through.
+### 4.4 File Operation Rules — the engine (built, stage 2)
+
+This is the most destructive code in the app. It is written to be safe first and fast second, and where the two conflict, safety wins without discussion.
+
+#### The invariant everything else serves
+
+**A Move is never a move. It is copy → verify → delete, per file, strictly in that order.** An original is deleted only after its copy has been read back off disk and confirmed byte for byte.
+
+**There is no rename fast path**, even when source and destination share a volume — and they always do, since §4.3 sorts in place under the source root. A rename would be faster and would skip verification entirely; having two different safety standards depending on which drive the card happened to be in is worth far less than the seconds it saves. *(This also means there is no cross-volume code path to get wrong: destination is always `{sourceRoot}/…`, so the two are on the same volume by construction, and the copy-verify-delete path is the only path.)*
+
+**The only window in which a photo exists twice is between the verify and the delete.** A crash there leaves the **original** intact, which is the safe direction to fail. There is no window in which a photo exists in neither place.
+
+#### Verification: length **and** SHA-256 of the contents
+
+Size-plus-timestamp was the earlier specification and is not enough — it cannot detect a copy that is the right length and the wrong bytes, which is exactly what a failing cable or a bad sector produces.
+
+The cost is one extra read, not two: the source has to be read to copy it, so its digest is computed *during* the copy and only the destination needs re-reading. Measured at **155 MB across 200 files in 3.1 s**, including the per-file flush-to-disk, which is not a cost worth trading for a weaker check. The destination is flushed to physical disk before being verified, so the check cannot pass on bytes that only reached the OS cache.
+
+The source's last-write time is carried across afterwards, because §1.3's sort order keys on it and a reset timestamp silently reorders a shoot.
+
+#### Nothing is ever overwritten
+
+Relative paths are preserved inside each bucket (§4.3), which removes most collisions. For any that remain — a second Finish Session meeting the first one's output, which is real photographs — the incoming file is suffixed `_1`, `_2`, and the rename is recorded in the log. Destinations are opened `FileMode.CreateNew`, so the filesystem enforces this even if the collision check were wrong.
+
+#### Failure, cancellation, and what is left behind
+
+- **On any error the run stops.** Files already completed stay completed and are not rolled back; every file not yet reached keeps its original exactly where it was.
+- **A failed file leaves nothing at the destination.** Any partial copy is removed before the error is reported. Because destinations are only ever newly created files, that cleanup can never delete something that existed before the run.
+- **If a verified copy exists but its original cannot be deleted**, the copy is kept and the file is reported. Deleting the good copy to tidy up would throw away the only proof the copy succeeded, and the original is still there either way.
+- **Cancel stops at a file boundary, never part-way through one.** Once a file's copy has succeeded it is seen through to its verify and delete; the cancel is observed before the next file starts. Only the copy itself is interruptible, and a copy interrupted mid-stream has its partial destination deleted and its original left untouched.
+- **A `failure report.txt` is written at the source root** — not in `%LOCALAPPDATA%` — whenever a run does not complete. Whoever is looking at a folder that did not fully sort is looking at the folder. It lists what failed and why, what was never reached, and what was already completed, and it states plainly that no photo has been lost.
+
+#### Before it starts, and afterwards
+
+- **Free space is checked up front** against the total bytes to be written plus 64 MB of head-room, and the run refuses to start rather than discovering the problem halfway. A Move needs the full amount too, since every file is copied before its original is deleted. A volume whose free space cannot be queried — a network destination — is *not* treated as full.
+- **A run log is always written** to `%LOCALAPPDATA%\FastCull\logs\`, whatever the outcome. An operation on somebody's photographs that leaves no record is not acceptable even when it works.
+- **The output buckets are excluded from the scan.** Sorting in place means the output lands inside the folder that gets rescanned; without this, reopening a sorted folder listed every photo twice — measured, a 200-photo folder reopened as 400 — and a second Finish Session would re-sort what it had already sorted, nesting `Approved/Approved`. This is what makes §4.1's "a reopened session is what is still here" mean the photos still awaiting a decision.
+
+#### Still not built
+
+- **Companion files do not travel together yet.** §1.4's RAW+JPEG pairing is unimplemented, so each file is moved on its own. The PRD's original "the group moves or nothing moves" describes the intended behaviour once pairing exists.
 
 ### 4.5 XMP Sidecars (deferred, not cancelled)
 Writing `xmp:Rating` and `xmp:Label` sidecars in place would let Lightroom Classic read ratings without moving a single byte. Out of scope for v1.0 by decision. `XmpWriter` exists as a stubbed interface so adding it later is an afternoon rather than a refactor.

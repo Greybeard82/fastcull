@@ -76,6 +76,34 @@ namespace Fastcull.Services
         public const string RatedFolder = "Rated";
 
         /// <summary>
+        /// Whether a path relative to the scan root is inside one of the output buckets.
+        ///
+        /// **The scan must skip these.** Sorting happens in place under the source root (§4.3), so
+        /// the output lands inside the folder that gets rescanned - and without this filter a
+        /// reopened session lists every photo twice, once where it started and once where it was
+        /// sorted to. Measured before this existed: a 200-photo folder reopened as 400. Worse, a
+        /// second Finish Session would then re-sort the already-sorted copies into Approved/Approved
+        /// and, in Move mode, relocate them again.
+        ///
+        /// This is what makes §4.1's "a reopened session is what is still here" mean what it says:
+        /// the photos still awaiting a decision, not the ones already dealt with.
+        /// </summary>
+        public static bool IsInsideBucket(string relativePath)
+        {
+            if (string.IsNullOrEmpty(relativePath)) return false;
+
+            var first = relativePath
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries)
+                .FirstOrDefault();
+
+            return first is not null
+                && (first.Equals(ApprovedFolder, StringComparison.OrdinalIgnoreCase)
+                    || first.Equals(RejectedFolder, StringComparison.OrdinalIgnoreCase)
+                    || first.Equals(RatedFolder, StringComparison.OrdinalIgnoreCase));
+        }
+
+        /// <summary>
         /// Which pile a state belongs to.
         ///
         /// **Stars are tested before the flag, and that order is the rule** (PRD 4.3). Section 1.6's

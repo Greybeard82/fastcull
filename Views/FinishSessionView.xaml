@@ -58,13 +58,13 @@
                            Foreground="{StaticResource Accent200Brush}"
                            TextTrimming="CharacterEllipsis" MaxLines="1"/>
 
-                <!-- Stage 1 says so plainly. Somebody clicking Confirm must never be unsure
-                     whether their photographs just moved. -->
+                <!-- Says exactly what Confirm will do. Somebody clicking it must never be unsure
+                     whether their photographs are about to move. -->
                 <Border Margin="0,16,0,0" Padding="10,7"
                         BorderBrush="{StaticResource Neutral800Brush}" BorderThickness="1">
                     <TextBlock TextWrapping="Wrap" FontSize="10" LineHeight="15"
                                Foreground="{StaticResource Neutral500Brush}"
-                               Text="DRY RUN — stage 1. Confirm writes the full plan to a log file and moves nothing. No photo is copied, moved or deleted."/>
+                               Text="Every file is copied and then verified byte for byte. On a MOVE the original is deleted only after its copy passes that check, so a photo is never in neither place. Nothing is ever overwritten."/>
                 </Border>
 
                 <!-- ===================== Summary ===================== -->
@@ -127,9 +127,11 @@
                      click apart - a pre-selected default would be the app making that call. -->
                 <TextBlock Text="MOVE OR COPY — REQUIRED" FontSize="9" CharacterSpacing="160"
                            Margin="0,24,0,10"
+                           Visibility="{x:Bind ViewModel.FinishIdleVisibility, Mode=OneWay}"
                            Foreground="{StaticResource Neutral700Brush}"/>
 
-                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10"
+                      Visibility="{x:Bind ViewModel.FinishIdleVisibility, Mode=OneWay}">
                     <Button x:Name="CopyButton" Grid.Column="0" Click="Copy_Click" IsTabStop="False"
                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                             Padding="12,9" Background="Transparent"
@@ -157,6 +159,37 @@
                     </Button>
                 </Grid>
 
+                <!-- ===================== Progress (while running) ===================== -->
+                <StackPanel Margin="0,24,0,0" Spacing="8"
+                            Visibility="{x:Bind ViewModel.FinishRunningVisibility, Mode=OneWay}">
+                    <Grid ColumnDefinitions="*,Auto">
+                        <TextBlock Grid.Column="0" Text="WORKING" FontSize="9" CharacterSpacing="160"
+                                   Foreground="{StaticResource Neutral700Brush}"/>
+                        <TextBlock Grid.Column="1" Text="{x:Bind ViewModel.FinishProgressText, Mode=OneWay}"
+                                   FontSize="11"
+                                   Foreground="{StaticResource Neutral200Brush}"/>
+                    </Grid>
+
+                    <ProgressBar Value="{x:Bind ViewModel.FinishProgressValue, Mode=OneWay}" Maximum="100"
+                                 Height="3"
+                                 Foreground="{StaticResource AccentBrush}"
+                                 Background="{StaticResource Neutral900Brush}"/>
+
+                    <TextBlock Text="{x:Bind ViewModel.FinishCurrentFile, Mode=OneWay}"
+                               FontSize="9" TextTrimming="CharacterEllipsis" MaxLines="1"
+                               Foreground="{StaticResource Neutral700Brush}"/>
+
+                    <!-- Stops at the end of the file in flight, never part-way through one. -->
+                    <Button Click="CancelRun_Click" IsTabStop="False"
+                            HorizontalAlignment="Left" Margin="0,4,0,0"
+                            Padding="16,7" Background="Transparent"
+                            BorderBrush="{StaticResource Neutral700Brush}" BorderThickness="1">
+                        <TextBlock Text="CANCEL — FINISH CURRENT FILE AND STOP"
+                                   FontSize="9" CharacterSpacing="140"
+                                   Foreground="{StaticResource Neutral300Brush}"/>
+                    </Button>
+                </StackPanel>
+
                 <!-- ===================== Result ===================== -->
                 <Border Margin="0,18,0,0" Padding="10,8"
                         BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1"
@@ -168,7 +201,8 @@
                 </Border>
 
                 <!-- ===================== Actions ===================== -->
-                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,24,0,0">
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,24,0,0"
+                      Visibility="{x:Bind ViewModel.FinishIdleVisibility, Mode=OneWay}">
                     <Button Grid.Column="0" Click="Cancel_Click" IsTabStop="False"
                             Padding="16,8" Background="Transparent"
                             BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1">

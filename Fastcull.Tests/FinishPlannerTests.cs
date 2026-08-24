@@ -251,6 +251,25 @@ public class FinishPlannerTests
     public void AnUnnamedSessionFallsBackToTheFolderName(string root, string? name, string expected)
         => Assert.Equal(expected, SessionStore.Describe(name, root));
 
+    // ---- Bucket folders are excluded from the scan ----
+
+    [Theory]
+    [InlineData("Approved/a.jpg")]
+    [InlineData("Rejected/a.jpg")]
+    [InlineData("Rated/3/a.jpg")]
+    [InlineData("Rated/3/CardA/a.jpg")]
+    [InlineData("approved/a.jpg")]      // Windows paths are case-insensitive
+    public void SortedOutputIsNotRescanned(string relative)
+        => Assert.True(FinishPlanner.IsInsideBucket(relative.Replace('/', Path.DirectorySeparatorChar)));
+
+    [Theory]
+    [InlineData("a.jpg")]
+    [InlineData("CardA/a.jpg")]
+    [InlineData("ApprovedShots/a.jpg")]     // a real folder that merely starts with the word
+    [InlineData("CardA/Approved/a.jpg")]    // only the TOP level is an output bucket
+    public void OrdinaryFoldersAreStillScanned(string relative)
+        => Assert.False(FinishPlanner.IsInsideBucket(relative.Replace('/', Path.DirectorySeparatorChar)));
+
     [Fact]
     public void ADriveRootStillProducesALabel()
     {

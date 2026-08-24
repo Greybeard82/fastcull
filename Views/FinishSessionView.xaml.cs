@@ -45,6 +45,12 @@ namespace Fastcull.Views
         private void Cancel_Click(object sender, RoutedEventArgs e) => ViewModel.CancelFinish();
 
         /// <summary>
+        /// Stops a run in flight. Distinct from Cancel_Click above, which closes the screen before
+        /// anything has started - these are different actions and share no code on purpose.
+        /// </summary>
+        private void CancelRun_Click(object sender, RoutedEventArgs e) => ViewModel.CancelFinishRun();
+
+        /// <summary>
         /// The button is disabled until a choice is made, so this cannot run without one - but
         /// ConfirmFinishAsync re-checks anyway. A guard that only lives in the UI is a guard that
         /// disappears the moment anything else calls the method.

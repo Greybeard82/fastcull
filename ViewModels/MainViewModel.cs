@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Fastcull.Input;
@@ -208,8 +209,8 @@ namespace Fastcull.ViewModels
         public Visibility FinishResultVisibility =>
             HasFinishResult ? Visibility.Visible : Visibility.Collapsed;
 
-        /// <summary>The gate on the Confirm button. Nothing else disables it.</summary>
-        public bool CanConfirmFinish => FinishOperation != FinishOperation.None;
+        /// <summary>The gate on the Confirm button: a choice must be made, and no run in flight.</summary>
+        public bool CanConfirmFinish => FinishOperation != FinishOperation.None && !IsFinishRunning;
 
         private FinishPlan? _finishSummary;
 
@@ -298,31 +299,128 @@ namespace Fastcull.ViewModels
             }
         }
 
+        private bool _isFinishRunning;
+
+        /// <summary>True while files are actually being written. Swaps the card into progress mode.</summary>
+        public bool IsFinishRunning
+        {
+            get => _isFinishRunning;
+            private set
+            {
+                if (_isFinishRunning == value) return;
+                _isFinishRunning = value;
+
+                OnPropertyChanged(nameof(IsFinishRunning));
+                OnPropertyChanged(nameof(CanConfirmFinish));
+                OnPropertyChanged(nameof(FinishRunningVisibility));
+                OnPropertyChanged(nameof(FinishIdleVisibility));
+            }
+        }
+
+        public Visibility FinishRunningVisibility => IsFinishRunning ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility FinishIdleVisibility => IsFinishRunning ? Visibility.Collapsed : Visibility.Visible;
+
+        private int _finishDone;
+        private int _finishTotal;
+        private string _finishCurrentFile = string.Empty;
+
+        public string FinishProgressText => _finishTotal == 0 ? string.Empty : $"{_finishDone} / {_finishTotal}";
+        public string FinishCurrentFile => _finishCurrentFile;
+        public double FinishProgressValue => _finishTotal == 0 ? 0 : 100.0 * _finishDone / _finishTotal;
+
+        private CancellationTokenSource? _finishCts;
+
+        /// <summary>Requests a stop. The engine finishes the file in flight, then stops (PRD 4.4).</summary>
+        public void CancelFinishRun() => _finishCts?.Cancel();
+
         /// <summary>
-        /// PRD 4.2.1's dry run. Computes every destination and writes the plan to a log.
+        /// PRD 4.4. Performs the plan: copies, verifies, and on a Move deletes each original only
+        /// after its copy is confirmed.
         ///
-        /// **Moves and copies nothing.** Stage 2 turns this into real file operations; until then
-        /// the only thing Confirm can do to a photograph is describe it.
-        ///
-        /// The render and the write both happen on a worker: CLAUDE.md's UI-thread rule has no
-        /// exception for a file that is only a few hundred kilobytes.
+        /// **The whole thing runs on a worker thread.** CLAUDE.md's UI-thread rule has no exception
+        /// for file operations, and this is the largest block of I/O the app ever performs -
+        /// potentially thousands of files. Progress comes back through the dispatcher.
         /// </summary>
         public async Task ConfirmFinishAsync()
         {
-            if (!CanConfirmFinish) return;
+            if (!CanConfirmFinish || IsFinishRunning) return;
 
             var plan = BuildPlan(FinishOperation);
-            var timestamp = DateTimeOffset.Now;
 
-            var logPath = await Task.Run(() => FinishPlanner.WriteLog(plan, timestamp))
-                .ConfigureAwait(true);
+            _finishCts?.Dispose();
+            _finishCts = new CancellationTokenSource();
+            var token = _finishCts.Token;
 
-            // Debug too, so the plan is visible without hunting for the file during development.
-            System.Diagnostics.Debug.WriteLine(FinishPlanner.Render(plan, timestamp));
+            _finishDone = 0;
+            _finishTotal = plan.AffectedCount;
+            _finishCurrentFile = string.Empty;
+            FinishResult = string.Empty;
+            IsFinishRunning = true;
+            NotifyProgressChanged();
 
-            FinishResult = logPath is null
-                ? $"DRY RUN complete - {plan.AffectedCount} files planned. The log could not be written."
-                : $"DRY RUN complete - {plan.AffectedCount} files planned, nothing moved.\n{logPath}";
+            var progress = new Progress<FinishProgress>(p =>
+            {
+                _finishDone = p.Done;
+                _finishTotal = p.Total;
+                _finishCurrentFile = p.CurrentFile;
+                NotifyProgressChanged();
+            });
+
+            FinishRunReport report;
+            try
+            {
+                report = await Task.Run(
+                    () => FinishExecutor.ExecuteAsync(plan, new SystemFinishFileSystem(), progress, token),
+                    token).ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                IsFinishRunning = false;
+                FinishResult = $"The operation could not be started: {ex.Message}\nNothing was moved or copied.";
+                return;
+            }
+
+            IsFinishRunning = false;
+            FinishResult = Describe(report);
+
+            // The sequence no longer matches the folder once files have moved out of it, so the
+            // session is reloaded from disk. PRD 4.1's model is "a reopened session is what is
+            // still here" - this makes that true immediately rather than at the next launch.
+            if (report.DoneCount > 0 && report.Operation == FinishOperation.Move && CurrentFolder is { } folder)
+            {
+                IsFinishVisible = false;
+                await OpenFolderAsync(folder).ConfigureAwait(true);
+            }
+        }
+
+        private static string Describe(FinishRunReport report)
+        {
+            var verb = report.Operation == FinishOperation.Move ? "moved" : "copied";
+
+            var headline = report.Outcome switch
+            {
+                FinishOutcome.Completed => $"Done. {report.DoneCount} {verb}.",
+                FinishOutcome.Cancelled => $"Cancelled. {report.DoneCount} {verb} before stopping; every other original is untouched.",
+                FinishOutcome.RefusedNotEnoughSpace => "Not started.",
+                _ => $"Stopped. {report.DoneCount} {verb}; every original not yet processed is untouched.",
+            };
+
+            var lines = new List<string> { headline };
+
+            if (report.Message is not null) lines.Add(report.Message);
+            if (report.RenamedCount > 0) lines.Add($"{report.RenamedCount} renamed to avoid overwriting an existing file.");
+            if (report.FailedCount > 0) lines.Add($"{report.FailedCount} could not be processed.");
+            if (report.FailureReportPath is not null) lines.Add($"Details: {report.FailureReportPath}");
+            if (report.LogPath is not null) lines.Add($"Log: {report.LogPath}");
+
+            return string.Join(Environment.NewLine, lines);
+        }
+
+        private void NotifyProgressChanged()
+        {
+            OnPropertyChanged(nameof(FinishProgressText));
+            OnPropertyChanged(nameof(FinishCurrentFile));
+            OnPropertyChanged(nameof(FinishProgressValue));
         }
 
         /// <summary>
@@ -555,6 +653,11 @@ namespace Fastcull.ViewModels
 
             await foreach (var photo in scan)
             {
+                // Already-sorted output lives under the scan root (PRD 4.3), so without this the
+                // folder reopens showing every photo twice - once at its origin and once in its
+                // bucket - and a second Finish Session re-sorts what it already sorted.
+                if (FinishPlanner.IsInsideBucket(photo.RelativePath)) continue;
+
                 scanned.Add(photo);
 
                 // Only reveal the panel once the scan has run long enough that progress is worth
