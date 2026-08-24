@@ -100,13 +100,32 @@ namespace Fastcull.ViewModels
         {
             var root = FindDefaultSampleImagesRoot();
             Sidebar.SetFolder(root);
+            Sidebar.FolderNavigationRequested -= SetActiveIndex;
+            Sidebar.FolderNavigationRequested += SetActiveIndex;
+
             var scanner = new DirectoryScanner();
             var scanned = new List<ScannedPhoto>();
+
+            // PRD 1.2's progress pill. The count is real and updates as the scanner yields, which
+            // it genuinely does - DirectoryScanner is an IAsyncEnumerable over a channel, and this
+            // await frees the UI thread between files.
+            //
+            // What this is NOT is PRD 1.2's full requirement, which also wants the first image on
+            // screen while the tail is still being enumerated. That needs the sequence itself to
+            // be built incrementally, which is a larger change than a progress counter - see the
+            // run report. This pill is honest about what it measures rather than a placeholder.
+            var scanStarted = System.Diagnostics.Stopwatch.StartNew();
 
             await foreach (var photo in scanner.ScanAsync(root))
             {
                 scanned.Add(photo);
+
+                // Only reveal the panel once the scan has run long enough that progress is worth
+                // watching; below that it would be a flash at startup.
+                Sidebar.ReportScanProgress(scanned.Count, scanStarted.ElapsedMilliseconds > ScanRevealDelayMs);
             }
+
+            Sidebar.CompleteScan();
 
             var sorted = scanned
                 .OrderBy(p => p.SortTime)
@@ -147,8 +166,21 @@ namespace Fastcull.ViewModels
             // of the count, so a folder reopened mid-cull shows its real progress immediately.
             RefreshTally();
 
+            // Both derive from the sequence and neither changes again until the folder does, so
+            // they are built once here rather than on every rating like the tally.
+            Sidebar.UpdateFormats(sorted.Select(p => (p.FileName, p.Family)));
+            Sidebar.UpdateFolderTree(
+                Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+                sorted.Select((p, i) => new FolderTreeEntry(p.RelativePath, i)));
+
             SetActiveIndex(Items.Count > 0 ? 0 : -1);
         }
+
+        /// <summary>
+        /// How long a scan must run before the sidebar reveals itself to show progress. Below
+        /// this the reveal reads as a flicker; above it, the user is actually waiting.
+        /// </summary>
+        private const long ScanRevealDelayMs = 400;
 
         /// <summary>Flushes pending rating writes and closes the session database.</summary>
         public async Task ShutdownAsync()
@@ -181,6 +213,10 @@ namespace Fastcull.ViewModels
             ActiveIndex = index;
             Items[index].IsActive = true;
             ActiveItem = Items[index];
+
+            // Keeps the folder tree's "you are here" mark on the cursor. The tree does not filter,
+            // so this highlight is the whole of how it answers where in the shoot you are.
+            Sidebar.SetCurrentFolder(Path.GetDirectoryName(Items[index].Photo.RelativePath) ?? string.Empty);
 
             RecomputeSlots();
         }

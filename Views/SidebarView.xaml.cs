@@ -1,6 +1,7 @@
 using Fastcull.ViewModels;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 
 namespace Fastcull.Views
 {
@@ -36,5 +37,34 @@ namespace Fastcull.Views
         }
 
         private void PinButton_Click(object sender, RoutedEventArgs e) => ViewModel.TogglePin();
+
+        /// <summary>
+        /// Selecting a folder moves the cursor to its first photo. It deliberately does not filter
+        /// the sequence - see the note on FolderNode.FirstPhotoIndex.
+        /// </summary>
+        private void FolderRow_Tapped(object sender, TappedRoutedEventArgs e)
+        {
+            if (RowOf(sender) is { } row) ViewModel.NavigateToFolder(row);
+        }
+
+        /// <summary>
+        /// Expand/collapse only. Marking the tap handled is load-bearing: without it the event
+        /// bubbles to the row and opening a folder also moves the cursor into it, which was
+        /// measurably the behaviour before this was a Tapped handler.
+        /// </summary>
+        private void FolderChevron_Tapped(object sender, TappedRoutedEventArgs e)
+        {
+            e.Handled = true;
+
+            if (RowOf(sender) is { } row) ViewModel.ToggleFolder(row);
+        }
+
+        /// <summary>
+        /// The row's view-model, read from Tag rather than DataContext. ItemsRepeater does not
+        /// push DataContext into its templates, so reading it here returns null - the template
+        /// binds the item to Tag instead.
+        /// </summary>
+        private static FolderRowViewModel? RowOf(object sender)
+            => (sender as FrameworkElement)?.Tag as FolderRowViewModel;
     }
 }

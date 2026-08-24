@@ -3,6 +3,7 @@
     x:Class="Fastcull.Views.SidebarView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:Fastcull.ViewModels"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
@@ -48,7 +49,7 @@
     <Grid Background="#FF000000">
         <!-- Hairline on the trailing edge, the only thing dividing panel from stage. -->
         <Border BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="0,0,1,0">
-            <Grid Margin="16,14,16,16" RowDefinitions="Auto,Auto,Auto,*,Auto">
+            <Grid Margin="16,14,16,16" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
 
                 <!-- ================= Folder + pin ================= -->
                 <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
@@ -119,6 +120,47 @@
                     <TextBlock Text="{x:Bind ViewModel.ProgressText, Mode=OneWay}"
                                FontSize="9" CharacterSpacing="60" Margin="0,12,0,0"
                                Foreground="{StaticResource Neutral700Brush}"/>
+
+                    <!-- PRD 1.2's scan pill. Present only while a scan is running and has run
+                         long enough to be worth watching. -->
+                    <Border Visibility="{x:Bind ViewModel.ScanPillVisibility, Mode=OneWay}"
+                            Margin="0,10,0,0" Padding="8,3" CornerRadius="9"
+                            HorizontalAlignment="Left"
+                            BorderBrush="{StaticResource Neutral800Brush}" BorderThickness="1">
+                        <TextBlock Text="{x:Bind ViewModel.ScanProgressText, Mode=OneWay}"
+                                   FontSize="9" CharacterSpacing="60"
+                                   Foreground="{StaticResource Accent300Brush}"/>
+                    </Border>
+
+                    <!-- Format breakdown (PRD 1.5). One row per extension rather than per family:
+                         .ARW and .CR2 are both "Raw", and telling a mixed two-body card apart is
+                         the whole point of the section. -->
+                    <TextBlock Text="FORMATS" Style="{StaticResource SectionLabel}" Margin="0,22,0,8"
+                               Visibility="{x:Bind ViewModel.FormatsVisibility, Mode=OneWay}"/>
+
+                    <ItemsRepeater ItemsSource="{x:Bind ViewModel.Formats, Mode=OneWay}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Spacing="6"/>
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTemplate>
+                            <DataTemplate x:DataType="vm:FormatRowViewModel">
+                                <Grid ColumnDefinitions="Auto,*,Auto">
+                                    <TextBlock Grid.Column="0" Text="{x:Bind Label}" Width="46"
+                                               FontSize="9" CharacterSpacing="80"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource Neutral400Brush}"/>
+                                    <Rectangle Grid.Column="1" Height="4" RadiusX="2" RadiusY="2"
+                                               HorizontalAlignment="Left" VerticalAlignment="Center"
+                                               Fill="{StaticResource Neutral600Brush}"
+                                               Width="{x:Bind BarWidth}"/>
+                                    <TextBlock Grid.Column="2" Text="{x:Bind CountText}" Width="28"
+                                               FontSize="10" VerticalAlignment="Center"
+                                               HorizontalTextAlignment="Right"
+                                               Foreground="{StaticResource Neutral500Brush}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsRepeater.ItemTemplate>
+                    </ItemsRepeater>
                 </StackPanel>
 
                 <!-- ================= Star histogram ================= -->
@@ -186,6 +228,67 @@
                     </Grid>
                 </StackPanel>
 
+                <!-- ================= Folder tree (PRD 1.5) =================
+                     A flat, indented list rather than a WinUI TreeView: TreeView carries its own
+                     selection and hover brushes that would each have to be beaten back to black
+                     for PRD 1.10, and an indent plus a chevron is all the control was going to
+                     give us here.
+
+                     Clicking a folder MOVES THE CURSOR to its first photo; it does not filter the
+                     sequence. See the run report for why. The section hides itself entirely when
+                     the scanned folder is flat, since a tree of one node is just noise. -->
+                <StackPanel Grid.Row="3" Margin="0,26,0,0"
+                            Visibility="{x:Bind ViewModel.FolderTreeVisibility, Mode=OneWay}">
+                    <TextBlock Text="FOLDERS" Style="{StaticResource SectionLabel}"/>
+
+                    <ItemsRepeater ItemsSource="{x:Bind ViewModel.FolderRows, Mode=OneWay}">
+                        <ItemsRepeater.Layout>
+                            <StackLayout Spacing="1"/>
+                        </ItemsRepeater.Layout>
+                        <ItemsRepeater.ItemTemplate>
+                            <DataTemplate x:DataType="vm:FolderRowViewModel">
+                                <!-- Tag carries the row's own view-model. ItemsRepeater does not
+                                     propagate DataContext into a template, so a handler reading
+                                     sender.DataContext gets null - this project has been caught by
+                                     that once already, in the filmstrip. x:Bind with no path
+                                     resolves to the item itself, which is exactly what is wanted. -->
+                                <Grid Margin="{x:Bind Indent}" ColumnDefinitions="Auto,*,Auto"
+                                      Background="Transparent"
+                                      Tag="{x:Bind}"
+                                      Tapped="FolderRow_Tapped"
+                                      Height="22">
+                                    <!-- Tapped, not Click: a Button's Click does not stop Tapped
+                                         bubbling to the row underneath, so using Click meant
+                                         opening a folder ALSO navigated into it. Handling Tapped
+                                         and marking it handled is what keeps the two separate -
+                                         the same trick the stage's rotate buttons use. -->
+                                    <Button Grid.Column="0" Width="16" Height="16" Padding="0"
+                                            IsTabStop="False"
+                                            Background="Transparent" BorderThickness="0"
+                                            Visibility="{x:Bind ChevronVisibility}"
+                                            Tag="{x:Bind}"
+                                            Tapped="FolderChevron_Tapped">
+                                        <TextBlock Text="{x:Bind ChevronGlyph, Mode=OneWay}"
+                                                   FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                   FontSize="8"
+                                                   Foreground="{StaticResource Neutral700Brush}"/>
+                                    </Button>
+
+                                    <TextBlock Grid.Column="1" Text="{x:Bind Name}"
+                                               Margin="4,0,0,0"
+                                               FontSize="11" VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis" MaxLines="1"
+                                               Foreground="{x:Bind NameBrush, Mode=OneWay}"/>
+
+                                    <TextBlock Grid.Column="2" Text="{x:Bind CountText}"
+                                               FontSize="9" VerticalAlignment="Center"
+                                               Foreground="{StaticResource Neutral700Brush}"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsRepeater.ItemTemplate>
+                    </ItemsRepeater>
+                </StackPanel>
+
                 <!-- ================= Finish Session placeholder =================
                      Disabled on purpose. PRD 4.1's modal and the entire batch copy/move path do
                      not exist in the codebase; a button that looked live would be a lie.
@@ -193,7 +296,7 @@
                      The tooltip sits on the wrapping Grid, not on the Button: a disabled control
                      receives no pointer input in WinUI, so a tooltip set on the Button itself
                      would never appear. -->
-                <Grid Grid.Row="4" ToolTipService.ToolTip="Coming soon — batch export is not built yet">
+                <Grid Grid.Row="5" ToolTipService.ToolTip="Coming soon — batch export is not built yet">
                     <Button IsEnabled="False"
                             HorizontalAlignment="Stretch" Height="30"
                             Background="Transparent"

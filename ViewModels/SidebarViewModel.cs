@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -56,8 +57,16 @@ namespace Fastcull.ViewModels
         [NotifyPropertyChangedFor(nameof(Visibility))]
         private bool _isHovered;
 
-        /// <summary>Pinned wins: a pinned panel stays up whatever the pointer does.</summary>
-        public bool IsShown => IsPinned || IsHovered;
+        /// <summary>
+        /// Pinned or hovered keeps the panel up; so does a scan slow enough to be worth watching.
+        ///
+        /// The scan case exists because PRD 1.2 puts the progress pill in this panel, and a panel
+        /// that auto-hides would show it to nobody. It is deliberately gated on the scan having
+        /// already run for a moment (see MainViewModel) rather than on the scan starting - a
+        /// hundred-file folder scans in about 200 ms, and revealing the panel for that long is a
+        /// flash at startup rather than information.
+        /// </summary>
+        public bool IsShown => IsPinned || IsHovered || IsScanRevealed;
 
         public Visibility Visibility => IsShown ? Visibility.Visible : Visibility.Collapsed;
 
@@ -126,10 +135,16 @@ namespace Fastcull.ViewModels
         public string RejectedText => _tally.Rejected.ToString("N0");
         public string UnflaggedText => _tally.Unflagged.ToString("N0");
 
-        /// <summary>e.g. "12 of 100 decided" - the one line that says how far the cull has got.</summary>
-        public string ProgressText => _tally.Total == 0
-            ? "No photos"
-            : $"{_tally.Decided:N0} of {_tally.Total:N0} decided";
+        /// <summary>
+        /// e.g. "12 of 100 decided" - the one line that says how far the cull has got. Blank while
+        /// a scan is running: the pill is already saying what is happening, and "No photos" next
+        /// to "1,957 files found" reads as a contradiction rather than as a sequence not built yet.
+        /// </summary>
+        public string ProgressText => IsScanRevealed
+            ? string.Empty
+            : _tally.Total == 0
+                ? "No photos"
+                : $"{_tally.Decided:N0} of {_tally.Total:N0} decided";
 
         public string Star1Text => _tally.StarCount(1).ToString("N0");
         public string Star2Text => _tally.StarCount(2).ToString("N0");
@@ -158,6 +173,148 @@ namespace Fastcull.ViewModels
 
             // Floor at 2px so a level with a real, nonzero count never renders as nothing.
             return Math.Max(2, HistogramTrackWidth * count / max);
+        }
+
+        // ------------------------------------------------------------------
+        // Scan progress (PRD 1.2)
+        // ------------------------------------------------------------------
+
+        /// <summary>Set by MainViewModel once a scan has run long enough to be worth showing.</summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(IsShown))]
+        [NotifyPropertyChangedFor(nameof(Visibility))]
+        [NotifyPropertyChangedFor(nameof(ScanPillVisibility))]
+        [NotifyPropertyChangedFor(nameof(ProgressText))]
+        private bool _isScanRevealed;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(ScanProgressText))]
+        private int _scanFoundCount;
+
+        /// <summary>PRD 1.2's pill: "N files found", until the scan completes.</summary>
+        public string ScanProgressText => $"{ScanFoundCount:N0} files found";
+
+        public Visibility ScanPillVisibility => IsScanRevealed ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>Reports scan progress. Cheap enough to call per file.</summary>
+        public void ReportScanProgress(int found, bool reveal)
+        {
+            ScanFoundCount = found;
+            if (reveal && !IsScanRevealed) IsScanRevealed = true;
+        }
+
+        /// <summary>Scan finished: the pill goes away and the panel stops being held open by it.</summary>
+        public void CompleteScan() => IsScanRevealed = false;
+
+        // ------------------------------------------------------------------
+        // Format breakdown (PRD 1.5)
+        // ------------------------------------------------------------------
+
+        public ObservableCollection<FormatRowViewModel> Formats { get; } = new();
+
+        /// <summary>e.g. "77 ARW · 20 CR2 · 4 JPG". Empty before anything is scanned.</summary>
+        [ObservableProperty]
+        private string _formatSummary = string.Empty;
+
+        /// <summary>Hides the section header while there is nothing under it - during a scan, above all.</summary>
+        [ObservableProperty]
+        private Visibility _formatsVisibility = Visibility.Collapsed;
+
+        public void UpdateFormats(IEnumerable<(string FileName, Fastcull.Services.FormatFamily Family)> photos)
+        {
+            var counts = FormatBreakdown.From(photos);
+            var max = FormatBreakdown.Max(counts);
+
+            Formats.Clear();
+            foreach (var count in counts) Formats.Add(new FormatRowViewModel(count, max));
+
+            FormatSummary = FormatBreakdown.Summarise(counts);
+            FormatsVisibility = counts.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        // ------------------------------------------------------------------
+        // Folder tree (PRD 1.5)
+        // ------------------------------------------------------------------
+
+        public ObservableCollection<FolderRowViewModel> FolderRows { get; } = new();
+
+        /// <summary>Raised when a folder row is chosen. Carries the sequence index to move to.</summary>
+        public event Action<int>? FolderNavigationRequested;
+
+        private FolderNode? _folderRoot;
+
+        /// <summary>
+        /// Which folders are open, keyed by relative path. Held here rather than on the rows so
+        /// expansion survives a rebuild - the rows are recreated whenever the tree is reflattened.
+        /// </summary>
+        private readonly HashSet<string> _expanded = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Relative directory of the active photo, for the "you are here" highlight.</summary>
+        private string _currentFolder = string.Empty;
+
+        /// <summary>
+        /// True once the scanned folder actually has subfolders. A tree of a single node tells the
+        /// user nothing they cannot read from the folder name above it, so the section hides.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(FolderTreeVisibility))]
+        private bool _hasFolderTree;
+
+        public Visibility FolderTreeVisibility => HasFolderTree ? Visibility.Visible : Visibility.Collapsed;
+
+        public void UpdateFolderTree(string rootName, IEnumerable<FolderTreeEntry> entries)
+        {
+            _folderRoot = FolderTree.Build(rootName, entries);
+
+            // Open the root by default so its immediate subfolders are visible without a click;
+            // deeper levels stay closed so a deep tree cannot flood a 232px panel.
+            _expanded.Add(_folderRoot.RelativePath);
+
+            HasFolderTree = _folderRoot.HasChildren;
+            RebuildFolderRows();
+        }
+
+        /// <summary>Moves the "you are here" highlight. Called as the cursor moves.</summary>
+        public void SetCurrentFolder(string? relativeDirectory)
+        {
+            var folder = relativeDirectory ?? string.Empty;
+            if (string.Equals(folder, _currentFolder, StringComparison.OrdinalIgnoreCase)) return;
+
+            _currentFolder = folder;
+            foreach (var row in FolderRows)
+                row.IsCurrent = IsCurrentFolder(row.Node);
+        }
+
+        public void ToggleFolder(FolderRowViewModel row)
+        {
+            if (row is null || !row.Node.HasChildren) return;
+
+            if (!_expanded.Remove(row.Node.RelativePath))
+                _expanded.Add(row.Node.RelativePath);
+
+            RebuildFolderRows();
+        }
+
+        /// <summary>
+        /// Moves the cursor to the first photo in this folder's subtree. Deliberately NOT a
+        /// filter - see the note on <see cref="FolderNode.FirstPhotoIndex"/>.
+        /// </summary>
+        public void NavigateToFolder(FolderRowViewModel row)
+        {
+            if (row is null || !row.CanNavigate) return;
+            FolderNavigationRequested?.Invoke(row.Node.FirstPhotoIndex);
+        }
+
+        private bool IsCurrentFolder(FolderNode node)
+            => string.Equals(node.RelativePath, _currentFolder, StringComparison.OrdinalIgnoreCase);
+
+        private void RebuildFolderRows()
+        {
+            FolderRows.Clear();
+            if (_folderRoot is null) return;
+
+            foreach (var node in FolderTree.Flatten(_folderRoot, n => _expanded.Contains(n.RelativePath)))
+                FolderRows.Add(new FolderRowViewModel(node, _expanded.Contains(node.RelativePath), IsCurrentFolder(node)));
         }
 
         /// <summary>
