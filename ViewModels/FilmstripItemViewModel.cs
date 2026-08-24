@@ -186,7 +186,18 @@ namespace Fastcull.ViewModels
         }
 
         public ScannedPhoto Photo { get; }
-        public int Index { get; }
+
+        /// <summary>
+        /// Position in the sorted sequence. Settable because PRD 2.1.2's delete removes an item
+        /// from the middle and everything after it has to be renumbered - this is also
+        /// <see cref="ICacheableItem.Index"/>, which PRD 3.3's prefetch window and
+        /// furthest-from-cursor eviction are both indexed by, so a stale value there would send
+        /// the cache after the wrong photos.
+        ///
+        /// Owned by MainViewModel, which is the only thing that knows the sequence. Nothing else
+        /// should write it.
+        /// </summary>
+        public int Index { get; set; }
 
         // ------------------------------------------------------------------
         // PRD 1.5 Active Photo / 1.8.1 info overlay

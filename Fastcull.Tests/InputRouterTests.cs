@@ -1,91 +1,129 @@
-﻿using Fastcull.Input;
+using Fastcull.Input;
 using Windows.System;
 using Xunit;
 
 namespace Fastcull.Tests;
 
 /// <summary>
-/// Covers every row of every table in the work order's Task C.3. This is the highest-value
-/// test set in the project: keyboard input cannot be injected in the dev sandbox, so these
-/// tests are the only verification this logic gets.
+/// The full PRD 2.1 key map, rewritten for the 2026-08-24 one-handed revamp.
+///
+/// This is the highest-value test set in the project: keyboard input cannot be injected in the
+/// dev sandbox, so these tests are the only verification this logic gets. They cover three things
+/// deliberately — that every new binding resolves, that the letter keys are *identical* to their
+/// arrow twins rather than merely similar, and that every removed binding is genuinely dead
+/// rather than quietly still working alongside its replacement.
 /// </summary>
 public class InputRouterTests
 {
-    // ---- Extended keys: the genuine grey navigation cluster ----
+    /// <summary>Resolves a key both ways, for bindings that must not depend on the extended bit.</summary>
+    private static void AssertResolvesEitherWay(VirtualKey key, AppCommand expected, int payload = 0)
+    {
+        foreach (var extended in new[] { true, false })
+        {
+            var result = InputRouter.Resolve(key, extended);
+            Assert.Equal(expected, result.Command);
+            Assert.Equal(payload, result.Payload);
+        }
+    }
+
+    // ---- The WASD cluster ----
+
+    [Theory]
+    [InlineData(VirtualKey.A, AppCommand.NavigatePrevious)]
+    [InlineData(VirtualKey.D, AppCommand.NavigateNext)]
+    [InlineData(VirtualKey.W, AppCommand.LadderUp)]
+    [InlineData(VirtualKey.S, AppCommand.LadderDown)]
+    public void WasdDrivesCursorAndRating(VirtualKey key, AppCommand expected)
+        => AssertResolvesEitherWay(key, expected);
+
+    // ---- Arrow keys, and the duplicate contract ----
 
     [Theory]
     [InlineData(VirtualKey.Left, AppCommand.NavigatePrevious)]
     [InlineData(VirtualKey.Right, AppCommand.NavigateNext)]
     [InlineData(VirtualKey.Up, AppCommand.LadderUp)]
     [InlineData(VirtualKey.Down, AppCommand.LadderDown)]
-    [InlineData(VirtualKey.Home, AppCommand.NavigateFirst)]
-    [InlineData(VirtualKey.End, AppCommand.NavigateLast)]
-    public void ExtendedNavigationKeys_ResolveToNavigationAndLadder(VirtualKey key, AppCommand expected)
-    {
-        var result = InputRouter.Resolve(key, isExtendedKey: true);
-        Assert.Equal(expected, result.Command);
-    }
-
-    // ---- Non-extended: numpad with NumLock off ----
+    public void ArrowKeysStillDriveCursorAndRating(VirtualKey key, AppCommand expected)
+        => Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
 
     [Theory]
-    [InlineData(VirtualKey.End, 1)]        // numpad 1
-    [InlineData(VirtualKey.Down, 2)]       // numpad 2
-    [InlineData(VirtualKey.PageDown, 3)]   // numpad 3
-    [InlineData(VirtualKey.Left, 4)]       // numpad 4
-    [InlineData(VirtualKey.Clear, 5)]      // numpad 5
-    [InlineData(VirtualKey.Insert, 0)]     // numpad 0
-    public void NonExtendedNumpadKeys_ResolveToSetStars(VirtualKey key, int expectedStars)
+    [InlineData(VirtualKey.A, VirtualKey.Left)]
+    [InlineData(VirtualKey.D, VirtualKey.Right)]
+    [InlineData(VirtualKey.W, VirtualKey.Up)]
+    [InlineData(VirtualKey.S, VirtualKey.Down)]
+    public void TheLetterKeysAreTheSameActionAsTheirArrowTwin(VirtualKey letter, VirtualKey arrow)
     {
-        var result = InputRouter.Resolve(key, isExtendedKey: false);
-        Assert.Equal(AppCommand.SetStars, result.Command);
-        Assert.Equal(expectedStars, result.Payload);
+        // PRD 2.1: these are same-hand duplicates, not parallel behaviours. Asserting the whole
+        // ResolvedInput - command AND payload - is what stops the two drifting apart later.
+        var byLetter = InputRouter.Resolve(letter, isExtendedKey: false);
+        var byArrow = InputRouter.Resolve(arrow, isExtendedKey: true);
+
+        Assert.Equal(byArrow, byLetter);
     }
+
+    [Fact]
+    public void RateUpAndRateDownStepTheLadderRatherThanSettingAFlag()
+    {
+        // The distinction PRD 2.1 rests on: W/S and Up/Down are the ONLY keys that step.
+        foreach (var key in new[] { VirtualKey.W, VirtualKey.Up })
+            Assert.Equal(AppCommand.LadderUp, InputRouter.Resolve(key, key == VirtualKey.Up).Command);
+
+        foreach (var key in new[] { VirtualKey.S, VirtualKey.Down })
+            Assert.Equal(AppCommand.LadderDown, InputRouter.Resolve(key, key == VirtualKey.Down).Command);
+    }
+
+    // ---- Rotation, moved off A/S ----
 
     [Theory]
-    [InlineData(VirtualKey.Right)]     // numpad 6
-    [InlineData(VirtualKey.Home)]      // numpad 7
-    [InlineData(VirtualKey.PageUp)]    // numpad 9
-    [InlineData(VirtualKey.Up)]        // numpad 8
-    public void NonExtendedUnmappedNumpadKeys_ResolveToNone(VirtualKey key)
-    {
-        var result = InputRouter.Resolve(key, isExtendedKey: false);
-        Assert.Equal(AppCommand.None, result.Command);
-    }
-
-    // ---- The NumLock collisions PRD 1.6 calls out as a silent-failure test case ----
+    [InlineData(VirtualKey.Q, AppCommand.RotateLeft)]
+    [InlineData(VirtualKey.E, AppCommand.RotateRight)]
+    public void QAndERotate(VirtualKey key, AppCommand expected)
+        => AssertResolvesEitherWay(key, expected);
 
     [Fact]
-    public void NumLockCollision_Down_IsLadderDownWhenExtended_ButTwoStarsWhenNot()
+    public void RotationNoLongerLivesOnAOrS()
     {
-        Assert.Equal(AppCommand.LadderDown, InputRouter.Resolve(VirtualKey.Down, isExtendedKey: true).Command);
-
-        var numpad = InputRouter.Resolve(VirtualKey.Down, isExtendedKey: false);
-        Assert.Equal(AppCommand.SetStars, numpad.Command);
-        Assert.Equal(2, numpad.Payload);
+        // A and S are now navigation and rating. If rotation ever resolved from them again the
+        // cursor keys would silently start turning photos.
+        Assert.NotEqual(AppCommand.RotateLeft, InputRouter.Resolve(VirtualKey.A, false).Command);
+        Assert.NotEqual(AppCommand.RotateRight, InputRouter.Resolve(VirtualKey.S, false).Command);
     }
+
+    // ---- Jumps ----
+
+    [Theory]
+    [InlineData(VirtualKey.R, AppCommand.NavigateFirst)]
+    [InlineData(VirtualKey.T, AppCommand.NavigateLast)]
+    public void RAndTJumpToTheEnds(VirtualKey key, AppCommand expected)
+        => AssertResolvesEitherWay(key, expected);
+
+    // ---- Overlay, folder picker, zoom, delete ----
+
+    [Theory]
+    [InlineData(VirtualKey.F)]
+    [InlineData(VirtualKey.I)]
+    public void FAndIBothToggleTheOverlay(VirtualKey key)
+        => AssertResolvesEitherWay(key, AppCommand.ToggleInfo);
 
     [Fact]
-    public void NumLockCollision_Left_IsNavigatePreviousWhenExtended_ButFourStarsWhenNot()
-    {
-        Assert.Equal(AppCommand.NavigatePrevious, InputRouter.Resolve(VirtualKey.Left, isExtendedKey: true).Command);
-
-        var numpad = InputRouter.Resolve(VirtualKey.Left, isExtendedKey: false);
-        Assert.Equal(AppCommand.SetStars, numpad.Command);
-        Assert.Equal(4, numpad.Payload);
-    }
+    public void FAndIAreTheSameAction()
+        => Assert.Equal(
+            InputRouter.Resolve(VirtualKey.I, false),
+            InputRouter.Resolve(VirtualKey.F, false));
 
     [Fact]
-    public void NumLockCollision_End_IsNavigateLastWhenExtended_ButOneStarWhenNot()
-    {
-        Assert.Equal(AppCommand.NavigateLast, InputRouter.Resolve(VirtualKey.End, isExtendedKey: true).Command);
+    public void GOpensTheFolderPicker()
+        => AssertResolvesEitherWay(VirtualKey.G, AppCommand.OpenFolder);
 
-        var numpad = InputRouter.Resolve(VirtualKey.End, isExtendedKey: false);
-        Assert.Equal(AppCommand.SetStars, numpad.Command);
-        Assert.Equal(1, numpad.Payload);
-    }
+    [Fact]
+    public void SpaceTogglesZoom()
+        => AssertResolvesEitherWay(VirtualKey.Space, AppCommand.ToggleZoom);
 
-    // ---- Keys that mean the same thing regardless of the extended flag ----
+    [Fact]
+    public void DeleteRecyclesThePhoto()
+        => AssertResolvesEitherWay(VirtualKey.Delete, AppCommand.DeletePhoto);
+
+    // ---- Stars: top row and numpad ----
 
     [Theory]
     [InlineData(VirtualKey.Number1, 1)]
@@ -93,190 +131,118 @@ public class InputRouterTests
     [InlineData(VirtualKey.Number3, 3)]
     [InlineData(VirtualKey.Number4, 4)]
     [InlineData(VirtualKey.Number5, 5)]
-    [InlineData(VirtualKey.Number0, 0)]
+    public void TopRowDigitsSetStars(VirtualKey key, int stars)
+        => AssertResolvesEitherWay(key, AppCommand.SetStars, stars);
+
+    [Theory]
     [InlineData(VirtualKey.NumberPad1, 1)]
     [InlineData(VirtualKey.NumberPad2, 2)]
     [InlineData(VirtualKey.NumberPad3, 3)]
     [InlineData(VirtualKey.NumberPad4, 4)]
     [InlineData(VirtualKey.NumberPad5, 5)]
-    [InlineData(VirtualKey.NumberPad0, 0)]
-    public void DigitKeys_SetStars_RegardlessOfExtendedFlag(VirtualKey key, int expectedStars)
+    public void NumpadDigitsSetStars_NumLockOn(VirtualKey key, int stars)
+        => AssertResolvesEitherWay(key, AppCommand.SetStars, stars);
+
+    [Theory]
+    [InlineData(VirtualKey.End, 1)]        // numpad 1
+    [InlineData(VirtualKey.Down, 2)]       // numpad 2
+    [InlineData(VirtualKey.PageDown, 3)]   // numpad 3
+    [InlineData(VirtualKey.Left, 4)]       // numpad 4
+    [InlineData(VirtualKey.Clear, 5)]      // numpad 5
+    public void NumpadDigitsSetStars_NumLockOff(VirtualKey key, int stars)
     {
-        foreach (var extended in new[] { true, false })
-        {
-            var result = InputRouter.Resolve(key, extended);
-            Assert.Equal(AppCommand.SetStars, result.Command);
-            Assert.Equal(expectedStars, result.Payload);
-        }
+        // The NumLock split, untouched by the revamp: with NumLock off the numpad emits
+        // navigation keycodes, and only the extended-key bit separates them from the grey keys.
+        var result = InputRouter.Resolve(key, isExtendedKey: false);
+
+        Assert.Equal(AppCommand.SetStars, result.Command);
+        Assert.Equal(stars, result.Payload);
     }
 
     [Theory]
-    [InlineData(VirtualKey.C, AppCommand.SetPicked)]
-    [InlineData(VirtualKey.Z, AppCommand.SetRejected)]
-    [InlineData(VirtualKey.X, AppCommand.SetRejected)]
-    public void FlagLetterKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
+    [InlineData(VirtualKey.Down, AppCommand.LadderDown)]
+    [InlineData(VirtualKey.Left, AppCommand.NavigatePrevious)]
+    [InlineData(VirtualKey.End, AppCommand.None)]
+    public void TheSameKeycodeMeansSomethingElseWhenItIsTheGreyKey(VirtualKey key, AppCommand expected)
     {
+        // The other half of the split: numpad 2 and the Down arrow share a keycode, and rating
+        // must not fire when the user pressed the grey arrow.
         Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
+    }
+
+    // ---- Everything the revamp removed is genuinely dead ----
+
+    [Theory]
+    [InlineData(VirtualKey.P)]        // was SetPicked
+    [InlineData(VirtualKey.C)]        // was SetPicked
+    [InlineData(VirtualKey.X)]        // was SetRejected
+    [InlineData(VirtualKey.Z)]        // was SetRejected
+    [InlineData(VirtualKey.U)]        // was SetUnflagged
+    [InlineData(VirtualKey.Number0)]  // was clear-stars
+    [InlineData(VirtualKey.Escape)]   // was ExitZoom
+    public void RemovedBindingsDoNothingAtAll(VirtualKey key)
+    {
+        // Not "resolves to something else" - resolves to None. A removed key that quietly kept
+        // working alongside its replacement is the failure this guards against.
+        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: true).Command);
+        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: false).Command);
     }
 
     [Theory]
-    [InlineData(VirtualKey.P, AppCommand.SetPicked)]
-    [InlineData(VirtualKey.U, AppCommand.SetUnflagged)]
-    public void P_And_U_AreMappedAgain(VirtualKey key, AppCommand expected)
+    [InlineData(VirtualKey.Home)]
+    [InlineData(VirtualKey.End)]
+    public void HomeAndEndNoLongerJump(VirtualKey key)
     {
-        // This reverses PRD 2.1, which unmapped both outright ("not retained as aliases") and
-        // had a test asserting they resolved to None. Restored 2026-08-23 by explicit
-        // instruction. Recorded rather than quietly changed - the previous state was a decision.
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
+        // R and T replaced them. End still means numpad-1 when NOT extended, which is why this
+        // asserts only the extended (genuine grey key) case.
+        Assert.Equal(AppCommand.None, InputRouter.Resolve(key, isExtendedKey: true).Command);
     }
 
     [Fact]
-    public void X_IsRejected_Again_And_U_IsWhatClears()
+    public void NoDirectFlagSetKeyRemains()
     {
-        // X previously meant Unflagged - it had been reassigned away from Rejected, guarded by a
-        // test asserting it was NOT Rejected. That reassignment is now itself reversed: X rejects
-        // and U is what clears to unrated.
-        Assert.Equal(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
-        Assert.Equal(AppCommand.SetUnflagged, InputRouter.Resolve(VirtualKey.U, isExtendedKey: false).Command);
-    }
+        // PRD 2.1.1's consequence, pinned: the ladder is reachable only by stepping. If a
+        // direct-set key is reintroduced later this test is the one that should be updated
+        // deliberately, rather than the behaviour changing unnoticed.
+        var everyKey = System.Enum.GetValues<VirtualKey>();
 
-    [Fact]
-    public void ArrowUpAndDown_StepTheLadder_WhileTheFlagKeysSetDirectly()
-    {
-        // Two different rating gestures coexist: the arrows walk the PRD 1.6 ladder one position
-        // at a time, while P/X/U jump straight to a flag. Asserted together because they were
-        // briefly collapsed into one - Up/Down set flags directly - and that made states 3-7
-        // (Picked with 1-5 stars) unreachable from the keyboard.
-        Assert.Equal(AppCommand.LadderUp, InputRouter.Resolve(VirtualKey.Up, isExtendedKey: true).Command);
-        Assert.Equal(AppCommand.LadderDown, InputRouter.Resolve(VirtualKey.Down, isExtendedKey: true).Command);
-
-        Assert.Equal(AppCommand.SetPicked, InputRouter.Resolve(VirtualKey.P, isExtendedKey: false).Command);
-        Assert.Equal(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.X, isExtendedKey: false).Command);
-        Assert.Equal(AppCommand.SetUnflagged, InputRouter.Resolve(VirtualKey.U, isExtendedKey: false).Command);
-
-        // The NumLock split still holds: a non-extended Down is numpad 2, not a ladder step.
-        Assert.Equal(AppCommand.SetStars, InputRouter.Resolve(VirtualKey.Down, isExtendedKey: false).Command);
-    }
-
-    [Fact]
-    public void NewFlagKeys_DoNotCollideWithNumpadOrNavigationLogic()
-    {
-        // Z/X/C are not numpad keys on any standard layout, so the extended-key split must
-        // not change their meaning. Verified rather than assumed.
-        foreach (var key in new[] { VirtualKey.Z, VirtualKey.X, VirtualKey.C })
+        foreach (var key in everyKey)
         {
-            var extended = InputRouter.Resolve(key, isExtendedKey: true);
-            var notExtended = InputRouter.Resolve(key, isExtendedKey: false);
+            foreach (var extended in new[] { true, false })
+            {
+                var command = InputRouter.Resolve(key, extended).Command;
 
-            Assert.Equal(extended.Command, notExtended.Command);
-            Assert.Equal(extended.Payload, notExtended.Payload);
-            Assert.NotEqual(AppCommand.None, extended.Command);
-            Assert.NotEqual(AppCommand.SetStars, extended.Command);
-        }
-    }
-
-    // ---- Rotation (PRD 1.11) ----
-
-    [Theory]
-    [InlineData(VirtualKey.A, AppCommand.RotateLeft)]
-    [InlineData(VirtualKey.S, AppCommand.RotateRight)]
-    public void RotationKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
-    {
-        // Letter keys, so the NumLock/extended split must never shadow them.
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
-    }
-
-    [Fact]
-    public void A_TurnsLeft_And_S_TurnsRight()
-    {
-        // The keys run the way the photo does: A is left of S and turns the photo left.
-        //
-        // This reverses the original mapping, which had A meaning clockwise. That was specified
-        // deliberately and guarded by a test saying not to swap it - and it still turned out
-        // backwards in the hand, so it was reversed on 2026-08-23. Recorded here rather than
-        // quietly changed, because the previous direction was an explicit decision too.
-        Assert.Equal(AppCommand.RotateLeft, InputRouter.Resolve(VirtualKey.A, isExtendedKey: false).Command);
-        Assert.Equal(AppCommand.RotateRight, InputRouter.Resolve(VirtualKey.S, isExtendedKey: false).Command);
-    }
-
-    [Fact]
-    public void RotationKeys_CarryNoPayload_AndAreNotRatingOrNavigationCommands()
-    {
-        foreach (var key in new[] { VirtualKey.A, VirtualKey.S })
-        {
-            var resolved = InputRouter.Resolve(key, isExtendedKey: false);
-
-            Assert.Equal(0, resolved.Payload);
-            Assert.NotEqual(AppCommand.SetStars, resolved.Command);
-            Assert.NotEqual(AppCommand.LadderUp, resolved.Command);
-            Assert.NotEqual(AppCommand.LadderDown, resolved.Command);
-            Assert.NotEqual(AppCommand.NavigateNext, resolved.Command);
-            Assert.NotEqual(AppCommand.NavigatePrevious, resolved.Command);
+                Assert.NotEqual(AppCommand.SetPicked, command);
+                Assert.NotEqual(AppCommand.SetRejected, command);
+                Assert.NotEqual(AppCommand.SetUnflagged, command);
+            }
         }
     }
 
     [Fact]
-    public void RotationKeys_DoNotCollideWithTheFlagLetters()
+    public void NoKeyClearsStars()
     {
-        var rotation = new[] { VirtualKey.A, VirtualKey.S };
-        var flags = new[] { VirtualKey.Z, VirtualKey.X, VirtualKey.C };
-
-        foreach (var r in rotation)
-            foreach (var f in flags)
-                Assert.NotEqual(
-                    InputRouter.Resolve(f, isExtendedKey: false).Command,
-                    InputRouter.Resolve(r, isExtendedKey: false).Command);
-    }
-
-    // ---- Zoom ----
-
-    [Theory]
-    [InlineData(VirtualKey.Space, AppCommand.ToggleZoom)]
-    [InlineData(VirtualKey.Escape, AppCommand.ExitZoom)]
-    public void ZoomKeys_ResolveRegardlessOfExtendedFlag(VirtualKey key, AppCommand expected)
-    {
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: true).Command);
-        Assert.Equal(expected, InputRouter.Resolve(key, isExtendedKey: false).Command);
-    }
-
-    [Fact]
-    public void EscapeOnlyExits_ItNeverToggles()
-    {
-        // Escape must be safe to press when already un-zoomed, so it is a distinct command
-        // rather than a second toggle - otherwise it would zoom IN from the un-zoomed state.
-        Assert.Equal(AppCommand.ExitZoom, InputRouter.Resolve(VirtualKey.Escape, isExtendedKey: false).Command);
-        Assert.NotEqual(AppCommand.ToggleZoom, InputRouter.Resolve(VirtualKey.Escape, isExtendedKey: false).Command);
-    }
-
-    [Fact]
-    public void ZoomKeys_DoNotCollideWithRatingRotationOrNavigation()
-    {
-        foreach (var key in new[] { VirtualKey.Space, VirtualKey.Escape })
+        // SetStars with payload 0 was the clear-stars binding on 0/NumPad0. Both are gone.
+        foreach (var key in System.Enum.GetValues<VirtualKey>())
         {
-            var resolved = InputRouter.Resolve(key, isExtendedKey: false);
-
-            Assert.Equal(0, resolved.Payload);
-            Assert.NotEqual(AppCommand.SetStars, resolved.Command);
-            Assert.NotEqual(AppCommand.RotateLeft, resolved.Command);
-            Assert.NotEqual(AppCommand.RotateRight, resolved.Command);
-            Assert.NotEqual(AppCommand.NavigateNext, resolved.Command);
-            Assert.NotEqual(AppCommand.NavigatePrevious, resolved.Command);
+            foreach (var extended in new[] { true, false })
+            {
+                var resolved = InputRouter.Resolve(key, extended);
+                if (resolved.Command == AppCommand.SetStars)
+                    Assert.InRange(resolved.Payload, 1, 5);
+            }
         }
     }
 
     // ---- Everything else is None ----
 
     [Theory]
-    [InlineData(VirtualKey.Q)]
     [InlineData(VirtualKey.Enter)]
     [InlineData(VirtualKey.Tab)]
-    [InlineData(VirtualKey.Delete)]
     [InlineData(VirtualKey.F1)]
     [InlineData(VirtualKey.Control)]
     [InlineData(VirtualKey.Shift)]
+    [InlineData(VirtualKey.B)]
     [InlineData(VirtualKey.Number6)]
     [InlineData(VirtualKey.Number9)]
     [InlineData(VirtualKey.NumberPad6)]
@@ -288,11 +254,12 @@ public class InputRouterTests
     }
 
     [Fact]
-    public void PageUpAndPageDown_ExtendedAreUnmapped()
+    public void ResolveIsPureAndRepeatable()
     {
-        // Only the non-extended (numpad 3) form of PageDown means anything; PRD 2.1 does not
-        // bind the grey PageUp/PageDown in filmstrip mode.
-        Assert.Equal(AppCommand.None, InputRouter.Resolve(VirtualKey.PageUp, isExtendedKey: true).Command);
-        Assert.Equal(AppCommand.None, InputRouter.Resolve(VirtualKey.PageDown, isExtendedKey: true).Command);
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.Equal(AppCommand.NavigateNext, InputRouter.Resolve(VirtualKey.D, false).Command);
+            Assert.Equal(AppCommand.LadderUp, InputRouter.Resolve(VirtualKey.W, false).Command);
+        }
     }
 }

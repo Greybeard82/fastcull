@@ -365,37 +365,68 @@ A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied 
 ## 2. Control Matrix
 
 ### 2.1 Filmstrip Mode
+
+**Revamped 2026-08-24 for one-handed operation.** The whole map is now reachable by the left hand resting on `WASD`, so the right hand is free for the mouse or for nothing at all. This replaced the previous scheme almost entirely; §2.1.1 lists what was removed and why that matters.
+
+The organising idea is that the two axes a cull actually uses — **which photo** and **what rating** — sit on one four-key cluster:
+
 | Key | Behaviour |
 | :--- | :--- |
-| `Left` / `Right` | Previous / next photo |
-| `Up` | Move one step **up** the cull ladder (§1.6), clamped at 5 stars |
-| `Down` | Move one step **down** the cull ladder (§1.6), clamped at Rejected |
-| `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
-| `0` / `NumPad0` | Clear stars, **keep the current flag** |
-| `C` or `P` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
-| `Z` or `X` | Set `Rejected` — ladder index 0, clears stars |
-| `U` | Set `Unrated` (`Unflagged`) — ladder index 1, clears stars |
-| `A` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
-| `S` | Rotate the selected photo 90° **clockwise** (§1.11) |
-| `Home` / `End` | First / last photo |
+| `A` | **Previous photo** |
+| `D` | **Next photo** |
+| `W` | **Rate up** — one step up the cull ladder (§1.6), clamped at 5 stars |
+| `S` | **Rate down** — one step down the ladder, clamped at Rejected |
+| `Q` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
+| `E` | Rotate the selected photo 90° **clockwise** (§1.11) |
+| `R` | Jump to the **first** photo in the sequence |
+| `T` | Jump to the **last** photo in the sequence |
+| `F` | Toggle the on-photo info overlay (§1.8.1) |
+| `G` | Open the folder picker (§1.1.1) — the same action as the sidebar's **CHANGE FOLDER** control |
 | `Space` | Toggle zoom mode (§1.7) |
-| `Esc` | Exit zoom mode |
-| `I` | Toggle the on-photo info overlay (§1.8.1) — device, resolution, capture date, place, folder. The full §1.8 HUD remains unbuilt |
-| ~~`Delete`~~ | ~~Move file group to Recycle Bin~~ — **not implemented** |
-| ~~`Ctrl+Z` / `Ctrl+Y`~~ | ~~Undo / redo~~ — **not implemented**, §1.9 is unbuilt |
+| `Delete` | Move the selected photo to the **Recycle Bin** (§2.1.2) |
+| `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
+| `Left` / `Right` | Previous / next photo — arrow-key equivalents of `A` / `D` |
+| `Up` / `Down` | Rate up / down — arrow-key equivalents of `W` / `S` |
+| `I` | Toggle the info overlay — synonym of `F`, retained |
 
-**Verified against `InputRouter` on 2026-08-24. Two corrections to what this table previously said:**
+**`W`/`S` and `Up`/`Down` are the same action, not two similar ones.** Both resolve to the identical command and call `CullState.Up()` / `CullState.Down()`. `W`/`S` is a same-hand duplicate of the arrows, added so the ladder can be driven without moving off `WASD`; it is not a second rating behaviour and must never diverge from the arrows. The same holds for `A`/`D` against `Left`/`Right`, and `F` against `I`.
 
-- **`X` is `Rejected`, not `Unrated`.** This table had reassigned `X` from Rejected to Unflagged; the code does not, and `U` is what clears to unrated. The earlier text was stale.
-- **`P` and `U` are mapped.** This section previously stated they were "no longer mapped to anything". They were restored on 2026-08-23 by explicit instruction, reversing that decision. `P` is a second alias for Picked and `U` is the only key that clears to unrated.
+**`Up`/`Down`/`W`/`S` are the only keys that *step* the ladder.** `1`–`5` set stars outright, jumping straight to their rung. Nothing else moves the rating.
 
-The result is two aliases per flag on the destructive ends and one key for the neutral middle: `Z`/`X` reject, `C`/`P` pick, `U` clears. `Z`, `X` and `C` still sit together under the left hand so the ladder can be driven without looking down; `A` and `S` sit on the row above, within the same hand position.
-
-**`Up` and `Down` are the only keys that *step* the ladder.** They call `CullState.Up()` / `CullState.Down()` and move exactly one rung, clamped at both ends. Every other rating key sets its state directly: `1`–`5` set stars outright (implying `Picked`), `0` clears stars while keeping the current flag, and the flag keys jump straight to their rung. This split was reverted into place on 2026-08-23 — `Up`/`Down` had briefly been rebound to set flags directly, which left the eight-rung ladder unreachable from the keyboard.
-
-**Rotation neither alters the cull state nor moves the cursor.** `A` and `S` change only the selected photo's orientation; rating keys change only its ladder position; navigation keys change only the cursor. The three are independent.
+**Rotation neither alters the cull state nor moves the cursor.** `Q` and `E` change only orientation; rating keys change only the ladder position; navigation keys change only the cursor. The three axes stay independent.
 
 Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of every accelerator, and its key-repeat behaviour is inconsistent.
+
+#### 2.1.1 What the revamp removed, and the one real consequence
+
+These were all live before 2026-08-24 and now do nothing at all. They are unmapped keys like any other — logged at debug level, otherwise ignored:
+
+| Removed | Was | Replacement |
+| :--- | :--- | :--- |
+| `C`, `P` | Set `Picked` directly | **None** — see below |
+| `Z`, `X` | Set `Rejected` directly | **None** — see below |
+| `U` | Set `Unrated` directly | **None** — see below |
+| `0` / `NumPad0` | Clear stars, keeping the flag | **None** |
+| `A` (old) | Rotate counter-clockwise | `Q` |
+| `S` (old) | Rotate clockwise | `E` |
+| `Home` / `End` | First / last photo | `R` / `T` |
+| `Esc` | Exit zoom | `Space`, which toggles |
+
+**The consequence worth stating plainly: there is no longer any way to jump directly to a flag.** Reaching `Rejected` from a 5-star photo previously took one keypress (`Z`); it now takes seven presses of `S`, walking the ladder down rung by rung. The same applies to `Picked` and to clearing a rating.
+
+That is a deliberate outcome of a map built around one hand and a single stepping axis, not an oversight. It is recorded here because it is the kind of trade that looks like a bug later: if rapid rejection turns out to matter more than the one-handed layout, the fix is to reintroduce a direct-set key rather than to assume `S` was meant to behave differently.
+
+#### 2.1.2 Delete
+
+`Delete` moves the selected photo to the **Recycle Bin** — a recoverable delete, never a permanent one.
+
+- The cursor stays at the same position in the sequence, which is now the photo that followed the deleted one, so a run of unwanted frames can be cleared without moving the hand. At the end of the sequence it steps back to the new last photo.
+- The remaining photos are renumbered, because position in the sequence is what §3.3's prefetch window and eviction are indexed by.
+- **A file that cannot be deleted — locked, read-only, on a disconnected volume — leaves the sequence untouched.** The photo stays where it is rather than vanishing from the strip while surviving on disk.
+
+**Undo does not cover this.** §1.9's undo stack is unbuilt, so within the app the deletion is final; recovery is through the Windows Recycle Bin. That gap is the reason this is a Recycle Bin move and not a permanent delete, and it is why the Recycle Bin's own restore is currently the only undo that exists.
+
+**Companion grouping does not apply yet.** §1.4's RAW+JPEG pairing is unimplemented, so `Delete` removes exactly the selected file. On a card where a RAW and its JPEG are separate sequence entries, each must be deleted separately — the PRD's original "move file **group**" wording describes the intended behaviour once pairing exists, not what ships today.
 
 ### 2.2 Zoom Mode
 
@@ -409,16 +440,25 @@ Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of e
 | `Space` or `Esc` | Exit to filmstrip |
 | `I` | Toggle HUD |
 
-**As built, 2026-08-24.** The reduced-scope zoom (§1.7) has **no separate key map**. `InputRouter` resolves keys identically in both modes — there is no two-state machine, because with no panning and no zoom-preserving navigation there is nothing for a second state to change:
+> Note: `Z`/`X`/`C` in this designed table were removed from the app entirely by the §2.1 revamp. The row is left as written because it is the *design*, not a description of the build — see §2.1.1.
+
+**As built, 2026-08-24.** The reduced-scope zoom (§1.7) has **no separate key map**. `InputRouter` resolves keys identically in both modes — there is no two-state machine, because with no panning and no zoom-preserving navigation there is nothing for a second state to change. Every §2.1 binding is live while zoomed:
 
 | Key | Behaviour while zoomed |
 | :--- | :--- |
-| `Left` / `Right` | Previous / next photo, exactly as in filmstrip mode. The zoom stays on and re-decodes for the new photo |
-| `Up` / `Down`, `1`-`5`, `0`, `Z`/`X`, `C`/`P`, `U` | Rating keys stay live, as designed |
-| `A` / `S` | Rotation, as in filmstrip mode — **not** previous/next. The designed `A`/`D` navigation binding was never implemented |
-| `I` | Toggle the info overlay (§1.8.1) — the same overlay as in filmstrip mode, positioned against the zoomed photo's box |
-| `Space` or `Esc` | Exit to filmstrip |
+| `A` / `D`, `Left` / `Right` | Previous / next photo. The zoom stays on and re-decodes for the new photo |
+| `W` / `S`, `Up` / `Down` | Rate up / down — the ladder stays live, as designed |
+| `1`-`5`, `NumPad1`-`NumPad5` | Set stars — live |
+| `Q` / `E` | Rotation, as in filmstrip mode |
+| `F` or `I` | Toggle the info overlay (§1.8.1), positioned against the zoomed photo's box |
+| `R` / `T` | Jump to first / last photo, staying zoomed |
+| `G` | Open the folder picker — leaves zoom when a folder loads |
+| `Delete` | Recycle-bin the selected photo (§2.1.2), staying zoomed on the next one |
+| `Space` | Exit to filmstrip |
+| ~~`Esc`~~ | **Removed** in the §2.1 revamp — `Space` toggles, so the second exit key was redundant |
 | ~~`Arrow keys` pan~~, ~~`PgUp`/`PgDn`~~ | Not implemented |
+
+The designed `A`/`D` row above wanted *zoom-preserving* navigation as a zoom-only binding. `A`/`D` now navigate in **both** modes, and zoom is in fact preserved across a photo change — so that row is satisfied, by a general binding rather than a mode-specific one.
 
 **Mouse, in zoom mode (§1.7.1 — specified, not yet built).** Zoom mode is the only place in the app where the mouse does more than click a thumbnail:
 

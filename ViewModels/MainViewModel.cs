@@ -381,7 +381,17 @@ namespace Fastcull.ViewModels
         }
 
         /// <summary>Sole entry point for changing the active photo. Never touches scroll position - that is a View concern.</summary>
-        public void SetActiveIndex(int index)
+        public void SetActiveIndex(int index) => SetActiveIndex(index, force: false);
+
+        /// <summary>
+        /// <paramref name="force"/> re-points at the index even when it has not changed.
+        ///
+        /// Needed because the no-op guard below identifies a photo by its POSITION, which is only
+        /// safe while the sequence is stable. A delete (PRD 2.1.2) puts a different photo at the
+        /// same index, and without this the guard would skip the update: measured, the sidebar's
+        /// Active Photo panel kept showing the deleted photo's metadata after it was gone.
+        /// </summary>
+        private void SetActiveIndex(int index, bool force)
         {
             if (Items.Count == 0)
             {
@@ -392,7 +402,7 @@ namespace Fastcull.ViewModels
             }
 
             index = Math.Clamp(index, 0, Items.Count - 1);
-            if (index == ActiveIndex) return;
+            if (!force && index == ActiveIndex) return;
 
             if (ActiveIndex >= 0 && ActiveIndex < Items.Count) Items[ActiveIndex].IsActive = false;
             ActiveIndex = index;
@@ -521,6 +531,13 @@ namespace Fastcull.ViewModels
                 case AppCommand.ExitZoom: IsZoomed = false; break;
 
                 case AppCommand.ToggleInfo: IsInfoVisible = !IsInfoVisible; break;
+
+                // Routed through the sidebar's existing request rather than opening a picker here:
+                // the picker needs a window handle, FilmstripView already listens for that event,
+                // and both paths end in the same OpenFolderAsync (PRD 1.1.1).
+                case AppCommand.OpenFolder: Sidebar.RequestChangeFolder(); break;
+
+                case AppCommand.DeletePhoto: DeleteActivePhoto(); break;
             }
         }
 
@@ -592,6 +609,78 @@ namespace Fastcull.ViewModels
 
         /// <summary>Raised after the active item's CullState changes, so persistence can observe it.</summary>
         public event Action<FilmstripItemViewModel>? RatingChanged;
+
+        /// <summary>
+        /// PRD 2.1.2: moves the selected photo to the Recycle Bin and drops it from the sequence.
+        ///
+        /// Order matters. The file is moved FIRST, and the sequence is only touched if that
+        /// succeeded - a locked or read-only file must leave the strip exactly as it was, rather
+        /// than disappearing from view while surviving on disk.
+        ///
+        /// Note this is genuinely destructive and PRD 1.9's undo does not exist, which is why it
+        /// is a Recycle Bin move: Windows' own restore is the only undo there is for it.
+        /// </summary>
+        private void DeleteActivePhoto()
+        {
+            var item = ActiveItem;
+            if (item is null) return;
+
+            var index = ActiveIndex;
+            if (index < 0 || index >= Items.Count) return;
+
+            if (!RecycleBin.TrySend(item.Photo.FilePath))
+            {
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Could not recycle {item.Photo.FilePath}");
+                return;
+            }
+
+            // Release its decodes before it leaves; nothing else will hold a reference afterwards.
+            item.IsPinned = false;
+            item.ReleaseZoomImage();
+            item.CancelLoad();
+            item.CancelThumbnailLoad();
+
+            Items.RemoveAt(index);
+
+            // Position in the sequence is what PRD 3.3's window and eviction are indexed by, so
+            // everything after the hole has to be renumbered before the cursor moves.
+            for (var i = index; i < Items.Count; i++) Items[i].Index = i;
+
+            if (Items.Count == 0)
+            {
+                // The folder is still open and still the remembered one - it is simply empty now.
+                _pinnedItems.Clear();
+                StageItems.Clear();
+                ActiveIndex = -1;
+                ActiveItem = null;
+                Sidebar.SetActivePhoto(null);
+                RefreshTally();
+                RebuildFolderViews();
+                return;
+            }
+
+            RefreshTally();
+            RebuildFolderViews();
+
+            // Staying at the same position lands on the photo that followed the deleted one, so a
+            // run of unwanted frames clears without moving the hand. At the end, step back.
+            //
+            // force: the index usually has not changed, but the photo at it has.
+            SetActiveIndex(Math.Min(index, Items.Count - 1), force: true);
+        }
+
+        /// <summary>Rebuilds the sidebar's format and folder views from the current sequence.</summary>
+        private void RebuildFolderViews()
+        {
+            var photos = Items.Select(i => i.Photo).ToList();
+
+            Sidebar.UpdateFormats(photos.Select(p => (p.FileName, p.Family)));
+            Sidebar.UpdateFolderTree(
+                string.IsNullOrEmpty(CurrentFolder)
+                    ? string.Empty
+                    : Path.GetFileName(CurrentFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
+                photos.Select((p, i) => new FolderTreeEntry(p.RelativePath, i)));
+        }
 
         // FindDefaultSampleImagesRoot is deliberately gone. Startup used to walk up from the
         // executable looking for a "SampleImages" folder and open whatever it found, which meant
