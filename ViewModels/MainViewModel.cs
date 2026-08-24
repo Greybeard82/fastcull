@@ -8,6 +8,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using Fastcull.Input;
 using Fastcull.Models;
 using Fastcull.Services;
+using Microsoft.UI.Xaml;
 
 namespace Fastcull.ViewModels
 {
@@ -79,6 +80,7 @@ namespace Fastcull.ViewModels
                 foreach (var item in Items) item.IsZoomed = value;
 
                 OnPropertyChanged(nameof(IsZoomed));
+                OnPropertyChanged(nameof(FilmstripBandVisibility));
             }
         }
 
@@ -163,12 +165,113 @@ namespace Fastcull.ViewModels
         /// </summary>
         private void RefreshTally() => Sidebar.Update(Items.Select(i => i.CullState));
 
+        // ------------------------------------------------------------------
+        // Empty state (PRD 1.1.1)
+        //
+        // First run and a folder that has gone away land in the same place on purpose. Neither is
+        // an error: a card that is not plugged in is an ordinary event for this app's users.
+        // ------------------------------------------------------------------
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(EmptyStateVisibility))]
+        [NotifyPropertyChangedFor(nameof(StageVisibility))]
+        [NotifyPropertyChangedFor(nameof(FilmstripBandVisibility))]
+        private bool _isEmpty = true;
+
+        /// <summary>Names the folder that could not be opened. Empty on a genuine first run.</summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(EmptyStateDetailVisibility))]
+        private string _emptyStateDetail = string.Empty;
+
+        public Visibility EmptyStateVisibility => IsEmpty ? Visibility.Visible : Visibility.Collapsed;
+        public Visibility StageVisibility => IsEmpty ? Visibility.Collapsed : Visibility.Visible;
+
+        /// <summary>
+        /// The bottom strip hides for two unrelated reasons - zoom takes the whole window, and the
+        /// empty state has no photos to strip. Computed here rather than stacked as two converter
+        /// bindings, which XAML cannot combine.
+        /// </summary>
+        public Visibility FilmstripBandVisibility =>
+            !IsEmpty && !IsZoomed ? Visibility.Visible : Visibility.Collapsed;
+
+        public Visibility EmptyStateDetailVisibility =>
+            string.IsNullOrWhiteSpace(EmptyStateDetail) ? Visibility.Collapsed : Visibility.Visible;
+
+        /// <summary>
+        /// Clears the sequence and shows the call to action. <paramref name="unopenableFolder"/>
+        /// is the path that could not be opened, or null on a first run with nothing recorded.
+        /// </summary>
+        private void ShowEmptyState(string? unopenableFolder)
+        {
+            Items.Clear();
+            StageItems.Clear();
+            _pinnedItems.Clear();
+
+            ActiveIndex = -1;
+            ActiveItem = null;
+            CurrentFolder = null;
+
+            Sidebar.SetFolder(null);
+            Sidebar.SetActivePhoto(null);
+            Sidebar.CompleteScan();
+            RefreshTally();
+            Sidebar.UpdateFormats(System.Array.Empty<(string, FormatFamily)>());
+            Sidebar.UpdateFolderTree(string.Empty, System.Array.Empty<FolderTreeEntry>());
+
+            EmptyStateDetail = string.IsNullOrWhiteSpace(unopenableFolder)
+                ? string.Empty
+                : $"Could not open {unopenableFolder}";
+
+            IsEmpty = true;
+        }
+
+        /// <summary>The folder currently open, or null when the app is on the empty state.</summary>
+        public string? CurrentFolder { get; private set; }
+
+        /// <summary>
+        /// Startup (PRD 1.1.1). Reopens the last folder and resumes it, or shows the empty state.
+        ///
+        /// There is no default folder and no path baked into the app: a folder here is an
+        /// unfinished job, and the only ones that ever open are ones the user chose.
+        /// </summary>
         public async Task LoadAsync()
         {
-            var root = FindDefaultSampleImagesRoot();
-            Sidebar.SetFolder(root);
             Sidebar.FolderNavigationRequested -= SetActiveIndex;
             Sidebar.FolderNavigationRequested += SetActiveIndex;
+
+            var remembered = AppSettings.GetResumableFolder();
+            if (remembered is null)
+            {
+                // First run, or a folder that has gone away. Both land here on purpose - the
+                // empty state names the folder it could not open when there was one.
+                ShowEmptyState(AppSettings.ReadRaw());
+                return;
+            }
+
+            await OpenFolderAsync(remembered);
+        }
+
+        /// <summary>
+        /// Loads and resumes a folder. The single path both launch and the sidebar's
+        /// change-folder control run, so there is no separate "open" flow to drift out of step.
+        /// </summary>
+        public async Task OpenFolderAsync(string root)
+        {
+            if (string.IsNullOrWhiteSpace(root)) return;
+
+            // Close the outgoing folder's writer first. Its ratings are already durable - PRD 3.1
+            // writes them as they happen - so this is a flush and a handle release, not a save.
+            await ShutdownAsync();
+
+            CurrentFolder = root;
+            IsEmpty = false;
+            EmptyStateDetail = string.Empty;
+
+            // Remembered before the scan rather than after: a folder that takes a while to load is
+            // still the folder the user chose, and a crash mid-scan should not lose that choice.
+            AppSettings.SetLastFolder(root);
+
+            Sidebar.SetFolder(root);
 
             var scanner = new DirectoryScanner();
             var scanned = new List<ScannedPhoto>();
@@ -183,7 +286,22 @@ namespace Fastcull.ViewModels
             // run report. This pill is honest about what it measures rather than a placeholder.
             var scanStarted = System.Diagnostics.Stopwatch.StartNew();
 
-            await foreach (var photo in scanner.ScanAsync(root))
+            // A folder can vanish between being chosen and being scanned - an unplugged card, a
+            // path that resolved a moment ago. Falling back to the empty state is the same
+            // outcome PRD 1.1.1 gives a remembered folder that no longer exists.
+            IAsyncEnumerable<ScannedPhoto> scan;
+            try
+            {
+                scan = scanner.ScanAsync(root);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Scan could not start for {root}: {ex}");
+                ShowEmptyState(root);
+                return;
+            }
+
+            await foreach (var photo in scan)
             {
                 scanned.Add(photo);
 
@@ -475,15 +593,10 @@ namespace Fastcull.ViewModels
         /// <summary>Raised after the active item's CullState changes, so persistence can observe it.</summary>
         public event Action<FilmstripItemViewModel>? RatingChanged;
 
-        private static string FindDefaultSampleImagesRoot()
-        {
-            for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
-            {
-                var candidate = Path.Combine(dir.FullName, "SampleImages");
-                if (Directory.Exists(candidate)) return candidate;
-            }
-
-            return Directory.GetCurrentDirectory();
-        }
+        // FindDefaultSampleImagesRoot is deliberately gone. Startup used to walk up from the
+        // executable looking for a "SampleImages" folder and open whatever it found, which meant
+        // the app had a hardcoded root and no way to open anything else. PRD 1.1.1 replaces it:
+        // the only folders that ever open are ones the user picked, and SampleImages is now
+        // reachable only by selecting it like any other folder.
     }
 }

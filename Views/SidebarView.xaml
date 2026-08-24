@@ -69,16 +69,31 @@
 
                 <!-- ================= Folder + pin ================= -->
                 <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
+                    <!-- The folder name doubles as the change-folder control (PRD 1.1.1): the
+                         panel already states which folder is open, so that is where a user looks
+                         to change it. -->
                     <StackPanel Grid.Column="0" Spacing="3">
-                        <TextBlock Text="{x:Bind ViewModel.FolderName, Mode=OneWay}"
-                                   FontSize="13" CharacterSpacing="40"
-                                   Foreground="{StaticResource Accent200Brush}"
-                                   TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                        <Button Click="ChangeFolder_Click" IsTabStop="False"
+                                HorizontalAlignment="Left" HorizontalContentAlignment="Left"
+                                Padding="0" Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="Choose a different folder">
+                            <TextBlock Text="{x:Bind ViewModel.FolderName, Mode=OneWay}"
+                                       FontSize="13" CharacterSpacing="40"
+                                       Foreground="{StaticResource Accent200Brush}"
+                                       TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                        </Button>
                         <TextBlock Text="{x:Bind ViewModel.FolderPath, Mode=OneWay}"
                                    FontSize="9" CharacterSpacing="20"
                                    Foreground="{StaticResource Neutral700Brush}"
                                    TextTrimming="CharacterEllipsis" MaxLines="1"
                                    ToolTipService.ToolTip="{x:Bind ViewModel.FolderPath, Mode=OneWay}"/>
+                        <Button Click="ChangeFolder_Click" IsTabStop="False"
+                                HorizontalAlignment="Left" Margin="0,4,0,0"
+                                Padding="8,2" Background="Transparent"
+                                BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1">
+                            <TextBlock Text="CHANGE FOLDER" FontSize="8" CharacterSpacing="140"
+                                       Foreground="{StaticResource Neutral500Brush}"/>
+                        </Button>
                     </StackPanel>
 
                     <!-- IsTabStop=False: keyboard focus belongs to the cull, never to chrome.

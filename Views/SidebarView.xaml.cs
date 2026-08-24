@@ -39,6 +39,13 @@ namespace Fastcull.Views
         private void PinButton_Click(object sender, RoutedEventArgs e) => ViewModel.TogglePin();
 
         /// <summary>
+        /// Asks for the picker rather than opening it. The picker needs a window handle for its
+        /// interop (PRD 1.1.1) and this control does not own one, so FilmstripView - which does -
+        /// listens for the request.
+        /// </summary>
+        private void ChangeFolder_Click(object sender, RoutedEventArgs e) => ViewModel.RequestChangeFolder();
+
+        /// <summary>
         /// Selecting a folder moves the cursor to its first photo. It deliberately does not filter
         /// the sequence - see the note on FolderNode.FirstPhotoIndex.
         /// </summary>

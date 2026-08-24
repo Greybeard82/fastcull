@@ -50,6 +50,24 @@ FastCull handles all common still image formats, not RAW alone. Decoder assignme
 
 Unknown or unsupported extensions are ignored silently during the scan. Files whose extension is supported but whose content fails to decode are shown in the filmstrip with an error placeholder and can still be flagged or deleted, never silently dropped.
 
+#### 1.1.1 Choosing a folder
+
+The scan root is **chosen by the user through the native Windows folder picker**. There is no default folder, no configured root, and no path baked into the application.
+
+**Launch: reopen the last folder and resume it.** On startup the app reads the last folder it was pointed at, and if that path still resolves it loads and resumes that session immediately — no picker, no prompt, no click.
+
+This is a deliberate stance about what a folder *is* in this app. A folder here is **an unfinished job**: a card the photographer is working through to completion over one or more sittings, with §3.1's ratings and rotations accumulating against it. Reopening it is the overwhelmingly likely intent, and asking every time would put a modal in front of the one action that is almost always right. The nearest comparison is an editor reopening the project you were last in, not a viewer showing an empty canvas.
+
+**Switching folders mid-session.** A control in the sidebar (§1.5) opens the same picker at any time. Choosing a folder runs exactly the same path as launch — full scan, then resume whatever state §3.1 already holds for it. There is no separate "open" code path to drift out of step with the startup one.
+
+Switching is **non-destructive to the folder being left**. Its ratings are already durable (§3.1 writes them as they happen), so nothing needs saving and nothing is lost; returning to it later resumes exactly where it was left.
+
+**First run, and a folder that has gone away.** Both land in the same place, deliberately:
+
+- **First run**, with no last folder recorded, shows an **empty state**: the app's name, a line explaining that it needs a folder of photos, and a button that opens the picker. Not a modal — a modal on first launch is a wall, and it cannot be dismissed into anything useful.
+- **A remembered folder that no longer resolves** — deleted, renamed, or on a card that is not plugged in — shows the same empty state rather than an error. It says which folder it could not open, then offers the same button. A missing card is an ordinary event for this app's users and is not an error condition.
+- **Neither case may crash or fail silently.** An app that opens to a blank window with no explanation is indistinguishable from one that is broken.
+
 ### 1.2 Ingestion
 - Recursive discovery of all supported extensions under a chosen root.
 - **The scan parses metadata headers only.** No pixel data is touched during the scan. Parsing is parallelised across `coreCount - 2` workers.
@@ -128,6 +146,8 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
     **Absent fields are omitted, never shown blank or as a placeholder** — with the three exposure fields as a deliberate exception. The general rule exists because a PNG has no camera model and most files have no GPS at all, and a panel that renders `Device: —` for half a folder is worse than one that renders four fields instead of five. The exception, and why it is one, is set out in §1.8.1; it is intentional and should not be reconciled back into the general rule.
 
     This table is the single field list. The on-photo overlay (§1.8.1) renders the same properties off the same view-model rather than restating them.
+
+  - **Change-folder control.** The folder name at the top of the panel is the natural place for it, since that is where the panel already states which folder is open. Activating it opens the native picker (§1.1.1); choosing a folder loads and resumes it through the same path launch uses. Cancelling changes nothing.
 
   - **Scan progress pill** — see §1.2.
   - **Finish Session is a disabled placeholder** carrying a "coming soon" tooltip. §4.1's modal and the entire batch copy/move path do not exist; a button that looked live would be a lie. The tooltip sits on a wrapping element because a disabled WinUI control receives no pointer input and would never show one.
@@ -468,8 +488,14 @@ File-backed SQLite at `%LOCALAPPDATA%\FastCull\sessions\{session-guid}.db`, `jou
 
 - All writes go through a single background writer consuming a bounded channel. The UI never awaits a write.
 - Writes are batched on a 250 ms timer or 32 pending operations, whichever comes first.
-- On launch, if a session DB exists whose root folder still resolves, offer to resume.
+- On launch, if a session DB exists whose root folder still resolves, ~~offer to resume~~ **resume it** — see §1.1.1. The offer was dropped: a folder is an unfinished job, and prompting before the action that is almost always right is friction rather than safety.
 - The session DB is deleted after a successful Finish Session.
+
+**The last-opened folder is app-level state, and does not live in a session database.** Each session DB is scoped to one folder, so none of them can answer "which folder was open last" — that is a fact about the application, not about any one card.
+
+It is stored as a small settings file at `%LOCALAPPDATA%\FastCull\settings.json`, beside the `sessions\` directory. Deliberately *not* `ApplicationData.Current.LocalSettings`, which is the obvious WinRT answer and does not work here: this app runs unpackaged, and `ApplicationData.Current` throws `InvalidOperationException` in that configuration. That is measured, not assumed — it is already in this project's crash log from the metadata work. A plain JSON file has no packaging requirement and can be inspected and deleted by hand, which matters for a setting whose failure mode is "opens the wrong folder".
+
+The file is best-effort in both directions: an unreadable or malformed settings file is treated as "no last folder" and lands on §1.1.1's empty state, and a failure to write it costs the next launch its auto-resume and nothing else. Neither may take the app down or block a folder from opening.
 
 In-memory SQLite was rejected: it does nothing for UI threading (that is what the background writer is for) and it loses a 45-minute session on any crash.
 

@@ -32,6 +32,43 @@
 
     <Grid RowDefinitions="*,Auto" Background="{StaticResource GroundBrush}">
 
+        <!-- ============================ EMPTY STATE ============================
+             PRD 1.1.1: shown on a first run with no remembered folder, and on a
+             remembered folder that no longer resolves. Deliberately not a modal -
+             a modal on first launch is a wall that cannot be dismissed into
+             anything useful. Spans both rows so the filmstrip band is not left
+             sitting empty beneath it. -->
+        <StackPanel Grid.Row="0" Grid.RowSpan="2"
+                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                    Spacing="14" MaxWidth="460"
+                    Visibility="{x:Bind ViewModel.EmptyStateVisibility, Mode=OneWay}">
+
+            <TextBlock Text="FASTCULL" FontSize="13" CharacterSpacing="220"
+                       HorizontalAlignment="Center"
+                       Foreground="{StaticResource Neutral600Brush}"/>
+
+            <TextBlock Text="Choose a folder of photos to start culling."
+                       FontSize="14" HorizontalAlignment="Center"
+                       HorizontalTextAlignment="Center" TextWrapping="Wrap"
+                       Foreground="{StaticResource Neutral300Brush}"/>
+
+            <!-- Names the folder it could not open, when there was one. Absent on a
+                 genuine first run, so this is not an error message pretending. -->
+            <TextBlock Text="{x:Bind ViewModel.EmptyStateDetail, Mode=OneWay}"
+                       Visibility="{x:Bind ViewModel.EmptyStateDetailVisibility, Mode=OneWay}"
+                       FontSize="10" HorizontalAlignment="Center"
+                       HorizontalTextAlignment="Center" TextWrapping="Wrap"
+                       Foreground="{StaticResource RejectBrush}"/>
+
+            <Button x:Name="EmptyStateChooseButton" Click="ChooseFolder_Click"
+                    HorizontalAlignment="Center" Margin="0,6,0,0"
+                    Padding="20,8" Background="Transparent"
+                    BorderBrush="{StaticResource Neutral700Brush}" BorderThickness="1">
+                <TextBlock Text="CHOOSE FOLDER" FontSize="10" CharacterSpacing="140"
+                           Foreground="{StaticResource Accent200Brush}"/>
+            </Button>
+        </StackPanel>
+
         <!-- ================================ STAGE ================================
              As many consecutive photos as actually fit (PRD 1.5), the active one centred
              except at the sequence ends.
@@ -50,6 +87,7 @@
              hit-testable, so none of the PRD 1.7.1 pointer handlers below would ever fire. -->
         <Border x:Name="StageHost" Grid.Row="0" Padding="{StaticResource StagePadding}"
                 Background="Transparent"
+                Visibility="{x:Bind ViewModel.StageVisibility, Mode=OneWay}"
                 SizeChanged="StageHost_SizeChanged"
                 PointerWheelChanged="StageHost_PointerWheelChanged"
                 PointerPressed="StageHost_PointerPressed"
@@ -316,7 +354,7 @@
              stage selection. Only a click does. -->
         <Grid Grid.Row="1" Height="108" Background="{StaticResource FilmstripBandBrush}"
               BorderThickness="0,1,0,0" BorderBrush="{StaticResource Neutral900Brush}"
-              Visibility="{x:Bind ViewModel.IsZoomed, Mode=OneWay, Converter={StaticResource HiddenIfZoomed}}">
+              Visibility="{x:Bind ViewModel.FilmstripBandVisibility, Mode=OneWay}">
 
             <ScrollViewer x:Name="BottomScroll" Padding="0,8"
                           HorizontalScrollMode="Enabled" HorizontalScrollBarVisibility="Hidden"

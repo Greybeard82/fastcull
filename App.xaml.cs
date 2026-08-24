@@ -30,6 +30,13 @@ namespace Fastcull
         private Window? _window;
 
         /// <summary>
+        /// The app's single window. Exposed because the native folder picker (PRD 1.1.1) needs a
+        /// window handle for its IInitializeWithWindow interop, and the view that opens the picker
+        /// has no other way to reach one.
+        /// </summary>
+        public static Window? MainWindow => (Current as App)?._window;
+
+        /// <summary>
         /// Initializes the singleton application object.  This is the first line of authored code
         /// executed, and as such is the logical equivalent of main() or WinMain().
         /// </summary>

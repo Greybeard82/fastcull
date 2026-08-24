@@ -101,6 +101,14 @@ namespace Fastcull.ViewModels
         [ObservableProperty]
         private string _folderPath = string.Empty;
 
+        /// <summary>
+        /// Raised when the change-folder control is activated (PRD 1.1.1). The View owns the
+        /// picker, because it needs the window handle; this only asks for one.
+        /// </summary>
+        public event Action? ChangeFolderRequested;
+
+        public void RequestChangeFolder() => ChangeFolderRequested?.Invoke();
+
         public void SetFolder(string? root)
         {
             if (string.IsNullOrWhiteSpace(root))

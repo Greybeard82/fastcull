@@ -110,8 +110,50 @@ namespace Fastcull.Views
         private async void FilmstripView_Loaded(object sender, RoutedEventArgs e)
         {
             Focus(FocusState.Programmatic);
+
+            // The sidebar's change-folder control routes here, because the picker needs the
+            // window handle and the view-model has no window (PRD 1.1.1).
+            ViewModel.Sidebar.ChangeFolderRequested -= OnChangeFolderRequested;
+            ViewModel.Sidebar.ChangeFolderRequested += OnChangeFolderRequested;
+
             await ViewModel.LoadAsync();
         }
+
+        private void ChooseFolder_Click(object sender, RoutedEventArgs e) => OnChangeFolderRequested();
+
+        private async void OnChangeFolderRequested() => await ChooseFolderAsync();
+
+        /// <summary>
+        /// Opens the picker and loads whatever is chosen. Cancelling changes nothing - the folder
+        /// already open stays open, which is also what a picker failure does.
+        /// </summary>
+        private async Task ChooseFolderAsync()
+        {
+            if (_folderPickerOpen) return;      // a second click while the dialog is up
+            _folderPickerOpen = true;
+
+            try
+            {
+                var window = App.MainWindow;
+                if (window is null) return;
+
+                var folder = await Services.FolderPickerService.PickFolderAsync(window);
+                if (string.IsNullOrWhiteSpace(folder)) return;
+
+                await ViewModel.OpenFolderAsync(folder);
+
+                // The new folder needs the same layout pass a fresh start gets, or the stage keeps
+                // the slot count and shared height it computed for the previous one.
+                UpdateStageLayout();
+                Focus(FocusState.Programmatic);
+            }
+            finally
+            {
+                _folderPickerOpen = false;
+            }
+        }
+
+        private bool _folderPickerOpen;
 
         // Keyboard is handled once at window level (MainWindow.RootGrid_PreviewKeyDown), per
         // PRD 2.2 and 2.4. Handling KeyDown here failed as soon as focus moved into the bottom
