@@ -219,7 +219,7 @@
                                             Background="#B0000000"
                                             Visibility="{x:Bind ZoomLoadingVisibility, Mode=OneWay}">
                                         <StackPanel Orientation="Horizontal" Spacing="6">
-                                            <ProgressRing IsActive="{x:Bind IsZoomLoading, Mode=OneWay}"
+                                            <ProgressRing IsActive="{x:Bind IsZoomLoadingShown, Mode=OneWay}"
                                                           Width="10" Height="10"
                                                           Foreground="{StaticResource Accent300Brush}"/>
                                             <TextBlock Text="LOADING 1:1"

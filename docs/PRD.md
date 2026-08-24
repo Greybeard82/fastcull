@@ -239,14 +239,25 @@ A working zoom exists and is in daily use. **It is not the Tier A / Tier B desig
 
 - **`Space` toggles true fullscreen and photo zoom together**, as one gesture. The window switches to `AppWindowPresenterKind.FullScreen` (system chrome gone, taskbar auto-hides) and the active photo expands to fill the stage alone. `Esc` is an equivalent exit and is safe to press when not zoomed. The app's own title-bar strip collapses separately, because it is drawn by the app rather than the system.
 - **The decode is sized to the photo's actual rendered box, not the raw viewport.** A letterboxed 3:2 photo on a 16:9 screen does not need viewport-width pixels; asking for them wastes decode and memory. Measured on this machine: a fullscreen zoom requests a 3440px long edge and holds about 30 MB of BGRA8.
+- **The zoom-tier decode follows the cursor.** Navigating to another photo while zoomed requests that photo's zoom tier, cancels the one being left, and swaps the sharp version in on arrival — the same path zoom entry uses, not a second one. Fixed 2026-08-24: the View hung its navigation work off `ActiveIndex`'s change notification, which is raised from *partway through* the cursor update, before `ActiveItem` and the stage slots are assigned. The handler therefore read the photo the user had just left, decided "same photo, already loaded" and skipped — so the new photo kept its ~960 px display-tier image until zoom was exited and re-entered. It now runs off an explicit `NavigationCompleted` signal raised once the whole update is applied. **Navigating rapidly cancels in flight:** measured at 14 navigations in under a second, 14 decodes were requested, 13 were superseded and discarded, and exactly one — the photo actually landed on — was assigned.
 - **The decode is re-requested whenever the stage element's size changes while zoomed.** This is not defensive coding — keying only on the photo was a real defect: entering zoom requested a decode sized to the still-windowed stage, the window then went fullscreen, the element grew, and nothing asked again. Measured, that shipped a 1424px decode into a 2158px box, a 1.5× upscale. The request is now keyed on `(photo, longEdge)`.
 - **RAW and JPEG both go through the same zoom-tier path.** RAW is served by `RawPreviewDecoder`'s embedded-JPEG extraction — the same candidate walk as the display tier, asked for a larger edge, which reaches past the small preview to the full-sensor-width JPEG the container also carries. **This is not debayering.** Measured: `.ARW` yields 3440×2293 at the zoom tier.
 - **The bottom filmstrip hides while zoomed**, so the photo owns the whole window.
 - **On-photo rating indicators stay visible**, so the ladder can be driven without leaving zoom.
 - The 512 MB dimension guard (§3.3) applies here, and a capped photo raises an on-photo `1:1 UNAVAILABLE` badge rather than looking mysteriously soft.
 - **Loading indicator, lower-right corner.** Entering zoom shows the display-tier image immediately and swaps the larger zoom-tier decode in when it lands, so there is a window — short on JPEG, longer on RAW — where the photo on screen is not yet the one that was asked for. The indicator marks that window: visible while the zoom-tier decode is in flight, gone the instant it swaps in. Without it a soft frame is indistinguishable from a finished one that is simply soft, which is exactly the confusion that cost three rounds of investigation when the zoom decode was silently failing.
-  - Lower-right, sharing that corner with the star badge and sitting opposite the §1.8 info overlay.
+  - Lower-right, sharing that corner with the star badge and sitting opposite the §1.8 info overlay. Anchored to the **photo's frame**, not to the window — on a letterboxed photo it sits inside the image, not out in the black margin.
   - It must clear on **every** exit from the pending state, not just the success path: a cancelled decode (navigating away, exiting zoom, a resize superseding the request) and a failed one both have to take it down, or it becomes a permanent artefact on a photo that is no longer loading anything.
+
+**It is gated in time, and that gate is the difference between working and appearing not to.** Added 2026-08-24 after "no loading indicator appears" was reported for a third time. Every link in the chain was correct — the flag was set on the UI thread, the binding re-read, the element rendered — but the zoom decode measures **146–229 ms** on this hardware for both RAW and a 9000×6000 PNG, and the §1.7's re-request on stage resize toggles the flag off and on again inside that window. A spinner that appears for a sixth of a second and flickers once is reported as a spinner that never appears, and it is not worth arguing that the report is wrong.
+
+| Rule | Value | Why |
+| :--- | :--- | :--- |
+| Do not show before | **180 ms** | A decode faster than this needs no indicator; showing one is a flash, which is worse than nothing |
+| Once shown, hold at least | **450 ms** | So it can be read rather than glimpsed |
+| A supersede while shown | **keeps it up** | The resize re-request must not blink it off and on |
+
+The consequence is deliberate: on fast hardware a fit-scale zoom now shows **nothing at all**, and the indicator appears only when there is genuinely something to wait for — a magnified re-decode (§1.7.1), a slower machine, a very large file.
 
 **What it is not — explicitly not implemented:**
 
@@ -255,7 +266,7 @@ A working zoom exists and is in daily use. **It is not the Tier A / Tier B desig
 | True pixel-level Tier A / Tier B decode beyond the embedded preview | **Not built.** There is one path: the embedded preview, at whatever size the container holds. A RAW whose preview fell below `FullResIsCheap` would have no full-resolution destination at all (§7) |
 | Panning at 1:1 | **Not built.** The photo is fit to the stage; there is no pan offset to preserve, and the arrow keys still navigate and rate. Superseded in part by the scale zoom below, which introduces a pan offset for the first time — but by mouse, not by keyboard, and against the zoom-tier image rather than true 1:1 pixels |
 | Metadata HUD in zoom (`I`) | **Not built** — §1.8 is unbuilt entirely |
-| `A` / `D` navigation while zoomed | **Not built.** `A` and `S` remain rotation in both modes (§1.11); §2.2's `A`/`D` binding was never implemented |
+| `A` / `D` navigation while zoomed | **Built.** Doubly stale as written: the 2026-08-24 revamp moved rotation to `Q`/`E` and gave `A`/`D` navigation (§2.1), and navigating while zoomed carries the zoom with it — see below |
 | Zoom level and pan persisting across navigation | **Not applicable** while there is neither a zoom level nor a pan offset |
 
 Because the zoom is fit-to-stage rather than 1:1, it answers "is this frame sharp enough and well composed" but **not** "is critical focus on the eye". The latter needs panning at true 1:1, and that remains the v0.2 work this section describes.
@@ -276,7 +287,14 @@ Fit-to-stage is the floor, not the ceiling. The mouse drives a scale factor on t
 - **Clamped to the image's own edges.** The image can never be dragged inward past its bounds, so no empty space appears beyond it. Clamping is **per axis**: at a given scale the image may overflow the viewport horizontally but not vertically, in which case it pans horizontally only and stays vertically centred.
 - **At exactly 100% panning is a no-op.** The image already fits, so there is nothing to pan to. Dragging does nothing rather than rubber-banding or nudging.
 
-**What scale does NOT do: trigger a decode.** Scaling is a pure render transform over the zoom-tier image already in memory. A wheel step must never start a new decode — twenty scroll steps would otherwise queue twenty decodes of the same photo, which is precisely the "space heater" failure §1.7 already warns about. The consequence is honest and worth stating: **above 100% the image is being enlarged past its decoded resolution and will soften.** True detail at scale needs the Tier B path, which remains unbuilt.
+**A wheel notch never starts a decode; the wheel coming to rest does.** Corrected 2026-08-24 — the original rule stopped at the first half and produced a real defect.
+
+- **The notch itself is a pure render transform** over the zoom-tier image already in memory, so the wheel stays instant. Nothing is decoded while the user is still turning it.
+- **When the wheel has been still for ~220 ms, a decode is requested at the magnified resolution** — `frame × rasterisation × scale`. The current image stays on screen until the sharper one lands, so there is no softening flash, and the debounce means one spin to the ceiling requests **one** decode rather than fifteen.
+
+The earlier rule was "scaling never decodes at all", and the consequence was written off as acceptable softening. It was not acceptable, and it was reported as a bug: at 200% the on-screen sharpness of a RAW measured **90.2** against **268.0** for the same photo at the fit scale — a 4× render upscale of a 2176 px bitmap. Exiting and re-entering zoom "fixed" it only because that resets the scale to 100%, where the decode matches the frame again. Since the whole purpose of magnifying is to see real pixels, a magnification that guarantees you cannot is self-defeating. Measured after the change: the same 200% view decodes at 4352 px and reads **122.8**, and on a lossless source with genuine detail at that size, **300.4** against **347.7** fitted.
+
+**The §3.3 dimension guard still applies** to the magnified request, so a large photo at a high scale is capped rather than attempted — that is what keeps this from becoming the "space heater" the original rule feared.
 
 **Reset:** scale and pan reset to 100% and centred on **every entry to zoom** and on **every change of photo while zoomed**. Carrying a 300% scale onto the next photo would drop the user into a corner of a frame they have not seen yet, with no cue as to where in it they are.
 

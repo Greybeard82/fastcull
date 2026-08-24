@@ -104,6 +104,7 @@ namespace Fastcull.Views
             InitializeComponent();
             _stagePadding = StageHost.Padding;
             ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+            ViewModel.NavigationCompleted += OnNavigated;
             ViewModel.StageItems.CollectionChanged += StageItems_CollectionChanged;
             ViewModel.RotationChanged += OnRotationChanged;
         }
@@ -213,10 +214,15 @@ namespace Fastcull.Views
         /// more than usual: the stage's own retention problem (PRD 3.3, still unbuilt) is already
         /// the largest memory risk in the app, and this must not stack on top of it.
         /// </summary>
-        private void RefreshZoomImage()
+        private void RefreshZoomImage([System.Runtime.CompilerServices.CallerMemberName] string caller = "")
         {
+            Diagnostics.ZoomTrace.Log("RefreshZoomImage",
+                $"from={caller} zoomed={ViewModel.IsZoomed} active={ViewModel.ActiveItem?.Photo.FileName ?? "none"} "
+                + $"loaded={_zoomLoadedItem?.Photo.FileName ?? "none"} loadedEdge={_zoomLoadedEdge}");
+
             if (!ViewModel.IsZoomed)
             {
+                Diagnostics.ZoomTrace.Log("  -> release (not zoomed)");
                 _zoomLoadedItem?.ReleaseZoomImage();
                 _zoomLoadedItem?.ResetZoomTransform();
                 _zoomLoadedItem = null;
@@ -239,13 +245,25 @@ namespace Fastcull.Views
             }
 
             var longEdge = ComputeZoomLongEdge(item);
-            if (longEdge == 0) return;
+
+            Diagnostics.ZoomTrace.Log("  computed longEdge",
+                $"{longEdge} (frame {item.StageFrameWidth:0}x{item.StageFrameHeight:0}, host {StageHost.ActualWidth:0}x{StageHost.ActualHeight:0})");
+
+            if (longEdge == 0)
+            {
+                Diagnostics.ZoomTrace.Log("  -> ABORT longEdge=0");
+                return;
+            }
 
             // Re-request when the PHOTO changes or when the size it needs changes. Keying on the
             // photo alone was the bug: entering zoom requests a decode sized to the still-windowed
             // stage, the window then goes fullscreen, the element grows - and nothing asked again.
             // Measured, that shipped a 1424px decode into a 2158px box, a 1.5x upscale.
-            if (ReferenceEquals(item, _zoomLoadedItem) && longEdge == _zoomLoadedEdge) return;
+            if (ReferenceEquals(item, _zoomLoadedItem) && longEdge == _zoomLoadedEdge)
+            {
+                Diagnostics.ZoomTrace.Log("  -> SKIP (same photo, same edge)", $"edge={longEdge}");
+                return;
+            }
 
             // Only clear when moving to a different photo. A same-photo re-request keeps the
             // current image visible until the sharper one lands.
@@ -253,6 +271,8 @@ namespace Fastcull.Views
 
             _zoomLoadedItem = item;
             _zoomLoadedEdge = longEdge;
+
+            Diagnostics.ZoomTrace.Log("  -> REQUEST decode", $"{item.Photo.FileName} edge={longEdge}");
 
             // Fire-and-forget by design: the display-tier image is already on screen, so nothing
             // is waiting on this. It swaps itself in when it lands.
@@ -282,15 +302,24 @@ namespace Fastcull.Views
             var scale = XamlRoot?.RasterizationScale ?? 1.0;
             if (scale <= 0) scale = 1.0;
 
-            var pixels = Math.Ceiling(dips * scale / 64.0) * 64.0;
+            // The wheel's magnification counts too (PRD 1.7.1). Without this the scale path draws
+            // a frame-sized decode through a 4x render transform - measured at 400%, the on-screen
+            // sharpness fell from 268 to 90 and only came back by exiting and re-entering zoom,
+            // which resets the scale. Magnifying is the one moment the user is asking for real
+            // pixels, so the request has to grow with the magnification.
+            var magnified = dips * scale * Math.Max(1.0, item.ZoomScale);
+
+            var pixels = Math.Ceiling(magnified / 64.0) * 64.0;
             return (uint)Math.Clamp(pixels, 1, 8192);
         }
 
         private void ViewModel_PropertyChanged(object? sender, PropertyChangedEventArgs e)
         {
-            if (e.PropertyName == nameof(MainViewModel.ActiveIndex))
-                OnNavigated();
-            else if (e.PropertyName == nameof(MainViewModel.IsZoomed))
+            // Navigation is NOT handled here any more. ActiveIndex's notification is raised from
+            // partway through SetActiveIndex, before ActiveItem and the stage slots are updated,
+            // so anything reading those from here saw the previous photo - see
+            // MainViewModel.NavigationCompleted, which this now listens to instead.
+            if (e.PropertyName == nameof(MainViewModel.IsZoomed))
                 OnZoomChanged();
         }
 
@@ -308,6 +337,8 @@ namespace Fastcull.Views
         /// </summary>
         private void OnZoomChanged()
         {
+            Diagnostics.ZoomTrace.Log("=== OnZoomChanged", $"IsZoomed={ViewModel.IsZoomed}");
+
             var before = MeasureActivePhoto();
 
             // The host's padding is part of what zoom reclaims.
@@ -405,7 +436,40 @@ namespace Fastcull.Views
             var anchor = PointerInFrame(e) ?? new Point(0, 0);
 
             if (ViewModel.ActiveItem.ScaleZoomAt(anchor.X, anchor.Y, steps))
+            {
+                ScheduleScaledRedecode();
                 e.Handled = true;
+            }
+        }
+
+        private Microsoft.UI.Dispatching.DispatcherQueueTimer? _scaleSettleTimer;
+
+        /// <summary>
+        /// Asks for a decode at the new magnification once the wheel stops (PRD 1.7.1).
+        ///
+        /// **Debounced rather than immediate, which is what keeps PRD 1.7.1's "a wheel notch must
+        /// never start a decode" true in the way that matters.** The transform still applies on the
+        /// notch itself, so the wheel stays instant; only after the user stops turning does a
+        /// sharper decode get requested, and the current image stays on screen until it lands.
+        /// Firing per notch would queue fifteen decodes on a single spin to the ceiling, of which
+        /// fourteen would be cancelled.
+        /// </summary>
+        private void ScheduleScaledRedecode()
+        {
+            if (_scaleSettleTimer is null)
+            {
+                _scaleSettleTimer = DispatcherQueue.CreateTimer();
+                _scaleSettleTimer.IsRepeating = false;
+                _scaleSettleTimer.Interval = TimeSpan.FromMilliseconds(220);
+
+                // Subscribed once, at construction. Re-subscribing on every notch would stack
+                // handlers and fire the decode as many times as the wheel was turned.
+                _scaleSettleTimer.Tick += (_, _) => RefreshZoomImage("scale settled");
+            }
+
+            // Restarting a running timer is what makes this a debounce rather than a throttle.
+            _scaleSettleTimer.Stop();
+            _scaleSettleTimer.Start();
         }
 
         private void StageHost_PointerPressed(object sender, PointerRoutedEventArgs e)

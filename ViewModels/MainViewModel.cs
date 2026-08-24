@@ -439,6 +439,23 @@ namespace Fastcull.ViewModels
         public void SetActiveIndex(int index) => SetActiveIndex(index, force: false);
 
         /// <summary>
+        /// Raised once a cursor move is **completely** applied - index, active item, and the
+        /// rebuilt stage slots.
+        ///
+        /// The View used to hang its navigation work off ActiveIndex's PropertyChanged instead,
+        /// and that fired from the middle of the update: ActiveIndex was assigned first, so a
+        /// handler reading ActiveItem or the stage frames saw the PREVIOUS photo's. While zoomed
+        /// that made the zoom-tier re-decode either skip entirely (old item == already-loaded
+        /// item) or fire for the photo the user had just left, sized to the un-zoomed 3-up slot -
+        /// measured, a 981x1472 decode where 2176x1451 was needed.
+        ///
+        /// An explicit "done" signal is used rather than moving the assignments around, because
+        /// the ordering inside the setter is load-bearing for other reasons and the next person to
+        /// reorder it would silently reintroduce this.
+        /// </summary>
+        public event Action? NavigationCompleted;
+
+        /// <summary>
         /// <paramref name="force"/> re-points at the index even when it has not changed.
         ///
         /// Needed because the no-op guard below identifies a photo by its POSITION, which is only
@@ -453,6 +470,7 @@ namespace Fastcull.ViewModels
                 ActiveIndex = -1;
                 ActiveItem = null;
                 RecomputeSlots();
+                NavigationCompleted?.Invoke();
                 return;
             }
 
@@ -474,6 +492,9 @@ namespace Fastcull.ViewModels
             ResolvePlace(Items[index]);
 
             RecomputeSlots();
+
+            // Last, deliberately: everything the View reads is now current.
+            NavigationCompleted?.Invoke();
         }
 
         /// <summary>
