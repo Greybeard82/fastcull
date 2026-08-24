@@ -55,6 +55,20 @@ Unknown or unsupported extensions are ignored silently during the scan. Files wh
 - **The scan parses metadata headers only.** No pixel data is touched during the scan. Parsing is parallelised across `coreCount - 2` workers.
 - **The filmstrip becomes interactive before the scan finishes.** Results stream into the sequence as they are found; the first image is on screen while the tail of the folder is still being enumerated. A progress pill in the sidebar shows `N files found` until the scan completes, then the final sort is applied.
 
+**Build status, 2026-08-24 — partially built, and the gap is not where it looks.**
+
+- **The scanner already streams.** `DirectoryScanner.ScanAsync` is an `IAsyncEnumerable<ScannedPhoto>` over a `System.Threading.Channels` channel, fed by `Parallel.ForEachAsync` across `coreCount - 2` workers. It yields each file as it is parsed. Nothing about the scanner needs changing.
+- **The consumer does not.** `MainViewModel.LoadAsync` drains that stream into a `List<ScannedPhoto>` before it builds a single view-model, so **the UI is not yet interactive during the scan** despite the underlying stream supporting it. The divergence from this section is one method, not the pipeline.
+- **The progress pill is built and is driven by real progress** — the count comes from the scanner as it yields, not from a timer or an estimate. It is gated so the sidebar auto-reveals only once a scan has run past **400 ms**; below that the reveal is a flash at startup rather than information. Measured: a 2,000-file folder crosses the threshold and shows the pill (observed at "1,957 files found"); a 100-file folder does not.
+
+**Deferred, deliberately: first image on screen during active scanning.** This is a sequence-identity change rather than a UI change, and three things would need rework together:
+
+1. **`FilmstripItemViewModel.Index` is immutable**, assigned at construction. It is also `ICacheableItem.Index`, which drives `PrefetchRange.Contains()` and the furthest-from-cursor eviction sort in §3.3. Inserting a photo mid-sequence invalidates every later index.
+2. **§1.3 sorts by capture time; files arrive in filesystem order.** So either append-then-sort — the filmstrip visibly reshuffles under the cursor mid-cull, which is worse than waiting — or sorted insert, which needs a mutable `Index` and an O(n) reindex per insert.
+3. **`SessionStore.RegisterPhotosAsync` takes the complete sorted list in one pass**, as does the rating restore. Streaming means either per-photo writes or ratings popping in visibly late.
+
+Tracked in `docs/BACKLOG.md`. Rushing it alongside UI work would produce exactly the mid-cull reshuffle this section exists to avoid.
+
 ### 1.3 Sort Order (CHANGED, consequence of mixed formats)
 
 RAW files reliably carry `DateTimeOriginal`. JPEGs usually do. PNG, WebP, BMP and most exported files carry no capture date at all. The v1.2 rule of "no date, sort to the end" would dump an entire folder of PNGs in a heap after everything else, which is useless.
@@ -86,6 +100,21 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
 
 ### 1.5 Layout
 - **Sidebar (left):** auto-hides on pointer exit, pinnable. Contains folder tree, file counts, live rating tallies, format breakdown, and **Finish Session**.
+
+  **As built, 2026-08-24.** 232px wide, pure `#FF000000` per §1.10, divided from the stage by a single hairline rule rather than a lighter fill.
+
+  - **Reveal and hide.** A 12px hot zone along the window's left edge reveals it on pointer entry; it hides on pointer exit. The pin toggle (top right) holds it open regardless. **Pin state is session-only** and deliberately not persisted — §3.1's database stores per-photo state, and a UI preference would mean a schema migration for a toggle.
+  - **Overlay when unpinned, reflow when pinned.** Unpinned it floats over the stage, so a photo being compared never resizes because the pointer drifted left. Pinned, the stage gives up a gutter of exactly the panel's width and reflows into what is left — which costs nothing extra, since the stage already recomputes its slot count on any width change (§1.5 variable slot count).
+  - **Live session tallies:** `Total`, `Picked`, `Rejected`, `Remaining`, plus an `X of Y decided` line. Picked and Rejected carry the flag colours from §1.5's state mark; Remaining is neutral. These update **in the same frame as the weight bar under the photo** — a tally that lagged the mark it describes would read as a bug.
+  - **Star histogram:** one row per level 1–5, count plus a bar. Bars scale to the **largest single count, not the total** — a folder with three 5-star photos out of two thousand would otherwise draw five bars all indistinguishable from zero.
+  - **Format breakdown: grouped by file extension, not by `FormatFamily`.** The family is too coarse to be useful here — `.ARW` and `.CR2` are both `Raw`, and a mixed two-body card is exactly the case §1.3 exists for and the one a photographer most wants broken out. Renders as `ARW 77 / CR2 20 / JPG 4`, ordered by count descending, bars scaled to the largest count as above. The section hides itself when empty.
+  - **Folder tree.** A **flat indented list, not a WinUI `TreeView`** — `TreeView` carries its own selection and hover brushes that would each have to be beaten back to black for §1.10, and an indent plus a chevron is the whole of what it was going to provide. Each row shows the folder name and the photo count for its **entire subtree**. The chevron expands and collapses; the root starts open so immediate subfolders are visible without a click, deeper levels start closed so a deep tree cannot flood a 232px panel.
+    - **Selecting a folder moves the cursor to the first photo in its subtree. It does not filter the sequence.** Filtering would change what the cull sequence *is*, and `ActiveIndex`, the §3.3 prefetch window and the tallies all index into it. Navigation gives most of the value at none of that cost.
+    - Because it does not filter, the folder containing the active photo is **highlighted in the accent tone and follows the cursor** — that "you are here" mark is what makes a read-only tree worth having.
+    - **The whole section hides when the scanned folder has no subfolders.** A tree of one node says nothing the folder name above it does not.
+  - **Scan progress pill** — see §1.2.
+  - **Finish Session is a disabled placeholder** carrying a "coming soon" tooltip. §4.1's modal and the entire batch copy/move path do not exist; a button that looked live would be a lie. The tooltip sits on a wrapping element because a disabled WinUI control receives no pointer input and would never show one.
+  - **Not built from this line's original list:** nothing. Every item is present, though "file counts" is realised as the tally block plus the format breakdown rather than a single number.
 - **Filmstrip:** virtualized horizontal scroller sized for 21:9 and 32:9. Active image scales to viewport height, neighbours flank left and right at reduced height.
 - **State mark (Chromeless):** state reads as a **3px weight bar directly beneath the photo**, spanning its full rendered width — neutral grey when unrated, green when picked, red-brown when rejected. Stars render as a run of `★` in the caption row beside the filename. There are **no borders around photos anywhere in the app**.
 - **Active indicator:** the active photo carries a **thin accent tick above it**, 2px tall and 18% of the photo's rendered width, centred. The active photo's filename also brightens to the accent tone while the flanking two stay muted. State and active-ness are therefore never confused — one reads below the photo, the other above it.
@@ -163,6 +192,34 @@ Zoom level and pan offset persist across `A` / `D` navigation.
 
 This is not a guarantee for every camera or RAW variant. Two caveats: only two bodies are represented in the survey, and a full-size preview's *dimensions* matching the sensor does not by itself confirm its JPEG compression quality survives 1:1 critical-focus inspection — that can only be confirmed once zoom mode (v0.2) is actually built and tested against it. `FullResIsCheap` in section 5.1 already encodes the fallback: any RAW file whose preview is below the 90% threshold still routes to Tier B automatically.
 
+---
+
+#### As built, 2026-08-24 — a reduced-scope zoom
+
+A working zoom exists and is in daily use. **It is not the Tier A / Tier B design above**, and the difference matters enough to state plainly rather than let the section imply more than ships.
+
+**What it does:**
+
+- **`Space` toggles true fullscreen and photo zoom together**, as one gesture. The window switches to `AppWindowPresenterKind.FullScreen` (system chrome gone, taskbar auto-hides) and the active photo expands to fill the stage alone. `Esc` is an equivalent exit and is safe to press when not zoomed. The app's own title-bar strip collapses separately, because it is drawn by the app rather than the system.
+- **The decode is sized to the photo's actual rendered box, not the raw viewport.** A letterboxed 3:2 photo on a 16:9 screen does not need viewport-width pixels; asking for them wastes decode and memory. Measured on this machine: a fullscreen zoom requests a 3440px long edge and holds about 30 MB of BGRA8.
+- **The decode is re-requested whenever the stage element's size changes while zoomed.** This is not defensive coding — keying only on the photo was a real defect: entering zoom requested a decode sized to the still-windowed stage, the window then went fullscreen, the element grew, and nothing asked again. Measured, that shipped a 1424px decode into a 2158px box, a 1.5× upscale. The request is now keyed on `(photo, longEdge)`.
+- **RAW and JPEG both go through the same zoom-tier path.** RAW is served by `RawPreviewDecoder`'s embedded-JPEG extraction — the same candidate walk as the display tier, asked for a larger edge, which reaches past the small preview to the full-sensor-width JPEG the container also carries. **This is not debayering.** Measured: `.ARW` yields 3440×2293 at the zoom tier.
+- **The bottom filmstrip hides while zoomed**, so the photo owns the whole window.
+- **On-photo rating indicators stay visible**, so the ladder can be driven without leaving zoom.
+- The 512 MB dimension guard (§3.3) applies here, and a capped photo raises an on-photo `1:1 UNAVAILABLE` badge rather than looking mysteriously soft.
+
+**What it is not — explicitly not implemented:**
+
+| Designed above | Status |
+| :--- | :--- |
+| True pixel-level Tier A / Tier B decode beyond the embedded preview | **Not built.** There is one path: the embedded preview, at whatever size the container holds. A RAW whose preview fell below `FullResIsCheap` would have no full-resolution destination at all (§7) |
+| Panning at 1:1 | **Not built.** The photo is fit to the stage; there is no pan offset to preserve, and the arrow keys still navigate and rate |
+| Metadata HUD in zoom (`I`) | **Not built** — §1.8 is unbuilt entirely |
+| `A` / `D` navigation while zoomed | **Not built.** `A` and `S` remain rotation in both modes (§1.11); §2.2's `A`/`D` binding was never implemented |
+| Zoom level and pan persisting across navigation | **Not applicable** while there is neither a zoom level nor a pan offset |
+
+Because the zoom is fit-to-stage rather than 1:1, it answers "is this frame sharp enough and well composed" but **not** "is critical focus on the eye". The latter needs panning at true 1:1, and that remains the v0.2 work this section describes.
+
 ### 1.8 Metadata HUD
 - Toggled by `I`. Renders as a transparent overlay: `Filename`, `Format`, `Model`, `Lens`, `ISO`, `Shutter`, `Aperture`, `Focal Length`, `Timestamp` (with its source tier from 1.3), `Dimensions`, `File Size`, and the current display tier so you always know whether you are looking at real pixels.
 - Fields absent from the file's metadata are omitted rather than shown blank. A PNG has no aperture; the HUD should not pretend otherwise.
@@ -188,12 +245,16 @@ A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied 
 - `A` turns 90° **counter-clockwise**; `S` turns 90° **clockwise**. The keys run the way the photo does — `A` is left of `S` and turns the photo left. Both wrap: four turns in either direction return the photo to where it started.
 - The turn is **animated**, using the same duration and easing as the navigation transition (§2.5). It is decoration on the same terms: the rotation state, the persisted value and the stage layout all change immediately, and nothing waits for the sweep.
 - Two small buttons in the caption row, right-aligned, do the same thing. They render in the **active** slot — wherever that is, which at the first and last photo of the sequence is an end slot rather than the centre (§1.5). Exactly one slot shows them at a time, and they act on the active photo.
-- **Rotation is a delta on top of whatever orientation the decode produced, never an absolute orientation of the final image.** The decoded baseline is not uniform across formats today — WIC applies EXIF orientation for JPEG and friends but not for RAW (see §7) — so a delta is the only thing that means the same in both cases. Note the corollary: if the RAW baseline is fixed later, a delta stored against the *old* baseline for an affected file becomes wrong. See §7 for the bounded set that applies to.
+- **Rotation is a delta on top of whatever orientation the decode produced, never an absolute orientation of the final image.** A delta means the same thing regardless of what the decoder hands back, which is why it was chosen.
+
+  **This decision paid for itself on 2026-08-24**, when EXIF orientation started being applied to RAW (§3.2). Every portrait RAW's decoded baseline turned a quarter turn that day. Because stored values are deltas on top of that baseline, existing user rotations stayed semantically correct across the change — "two more quarter turns than however this file naturally sits" is true before and after — and **no migration was needed**. An absolute orientation would have silently re-interpreted every value already in the database. The §7 risk row that tracked this is now closed.
 - **It is a display transform and never a re-decode.** Re-decoding would spend a decode on a transform, blow the §3.5 keypress budget, and invalidate cache entries once §3.3 exists.
 - Rotation **does not alter the cull state and does not move the cursor.** Rating and rotation are fully independent axes, and a write to one never disturbs the other in the database (§3.1).
 - It applies to **both** the stage photo and its filmstrip thumbnail. A photo rotated on stage that stays sideways in the strip is a bug.
 - A quarter turn inverts the photo's aspect, so the equal-height rule in §1.5 is fed the post-rotation aspect. Rotating one photo can therefore resize its two neighbours, because that rule sizes to the widest photo visible.
 - Rotation **persists across sessions and app restarts**, exactly as ratings do (§3.1).
+
+**Build status, 2026-08-24 — fully built as specified.** `A`/`S` rotate counter-clockwise/clockwise and wrap at four turns; the two caption-row buttons in the active slot do the same and claim their own tap so pressing one never also changes the selection; the turn animates on the same 110 ms eased-out timing as the navigation transition (§2.5) with state and layout changing immediately rather than waiting for the sweep; the value is written through `SessionStore` on the same background channel as ratings and survives a restart, which required a real schema migration for existing databases. It applies to both the stage photo and its filmstrip thumbnail, and feeds the equal-height rule its post-rotation aspect.
 
 ---
 
@@ -207,26 +268,35 @@ A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied 
 | `Down` | Move one step **down** the cull ladder (§1.6), clamped at Rejected |
 | `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
 | `0` / `NumPad0` | Clear stars, **keep the current flag** |
-| `C` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
-| `Z` | Set `Rejected` — ladder index 0, clears stars |
-| `X` | Set `Unrated` (`Unflagged`) — ladder index 1, clears stars |
+| `C` or `P` | Set `Picked` — ladder index 2 if currently 0 or 1; no-op if already 3–7 |
+| `Z` or `X` | Set `Rejected` — ladder index 0, clears stars |
+| `U` | Set `Unrated` (`Unflagged`) — ladder index 1, clears stars |
 | `A` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
 | `S` | Rotate the selected photo 90° **clockwise** (§1.11) |
 | `Home` / `End` | First / last photo |
-| `Space` | Enter zoom mode |
-| `I` | Toggle metadata HUD |
-| `Delete` | Move file group to Recycle Bin (undoable) |
-| `Ctrl+Z` / `Ctrl+Y` | Undo / redo |
+| `Space` | Toggle zoom mode (§1.7) |
+| `Esc` | Exit zoom mode |
+| ~~`I`~~ | ~~Toggle metadata HUD~~ — **not implemented**, §1.8 is unbuilt |
+| ~~`Delete`~~ | ~~Move file group to Recycle Bin~~ — **not implemented** |
+| ~~`Ctrl+Z` / `Ctrl+Y`~~ | ~~Undo / redo~~ — **not implemented**, §1.9 is unbuilt |
 
-The three flag keys sit together under the left hand, next to each other on a QWERTY keyboard, so the whole ladder can be driven without looking down: `Z` rejects, `X` clears to unrated, `C` picks. `A` and `S` sit on the row above them, within the same hand position.
+**Verified against `InputRouter` on 2026-08-24. Two corrections to what this table previously said:**
+
+- **`X` is `Rejected`, not `Unrated`.** This table had reassigned `X` from Rejected to Unflagged; the code does not, and `U` is what clears to unrated. The earlier text was stale.
+- **`P` and `U` are mapped.** This section previously stated they were "no longer mapped to anything". They were restored on 2026-08-23 by explicit instruction, reversing that decision. `P` is a second alias for Picked and `U` is the only key that clears to unrated.
+
+The result is two aliases per flag on the destructive ends and one key for the neutral middle: `Z`/`X` reject, `C`/`P` pick, `U` clears. `Z`, `X` and `C` still sit together under the left hand so the ladder can be driven without looking down; `A` and `S` sit on the row above, within the same hand position.
+
+**`Up` and `Down` are the only keys that *step* the ladder.** They call `CullState.Up()` / `CullState.Down()` and move exactly one rung, clamped at both ends. Every other rating key sets its state directly: `1`–`5` set stars outright (implying `Picked`), `0` clears stars while keeping the current flag, and the flag keys jump straight to their rung. This split was reverted into place on 2026-08-23 — `Up`/`Down` had briefly been rebound to set flags directly, which left the eight-rung ladder unreachable from the keyboard.
 
 **Rotation neither alters the cull state nor moves the cursor.** `A` and `S` change only the selected photo's orientation; rating keys change only its ladder position; navigation keys change only the cursor. The three are independent.
-
-`P` and `U` are **no longer mapped to anything**. Pressing either does nothing at all — they are unmapped keys like any other, logged at debug level and otherwise ignored. They are not retained as aliases.
 
 Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of every accelerator, and its key-repeat behaviour is inconsistent.
 
 ### 2.2 Zoom Mode
+
+**Designed:**
+
 | Key | Behaviour |
 | :--- | :--- |
 | `Arrow keys` | Pan, with acceleration on hold |
@@ -235,7 +305,17 @@ Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of e
 | `Space` or `Esc` | Exit to filmstrip |
 | `I` | Toggle HUD |
 
-Input routing is an explicit two-state machine, handled in one place at window level. Unmapped keys log at debug level rather than being silently swallowed.
+**As built, 2026-08-24.** The reduced-scope zoom (§1.7) has **no separate key map**. `InputRouter` resolves keys identically in both modes — there is no two-state machine, because with no panning and no zoom-preserving navigation there is nothing for a second state to change:
+
+| Key | Behaviour while zoomed |
+| :--- | :--- |
+| `Left` / `Right` | Previous / next photo, exactly as in filmstrip mode. The zoom stays on and re-decodes for the new photo |
+| `Up` / `Down`, `1`-`5`, `0`, `Z`/`X`, `C`/`P`, `U` | Rating keys stay live, as designed |
+| `A` / `S` | Rotation, as in filmstrip mode — **not** previous/next. The designed `A`/`D` navigation binding was never implemented |
+| `Space` or `Esc` | Exit to filmstrip |
+| ~~`Arrow keys` pan~~, ~~`PgUp`/`PgDn`~~, ~~`I`~~ | Not implemented |
+
+Input routing is handled in one place at window level, per §2.4 — `MainWindow.RootGrid_PreviewKeyDown`, a tunnelling handler that claims every mapped key before any focused child can consume it. Unmapped keys log at debug level rather than being silently swallowed. What does not yet exist is the *two-state* part: the router is currently mode-agnostic.
 
 ### 2.3 Key Repeat
 Holding `Right` must not queue 40 navigation events that replay after release. Navigation input is coalesced: the cursor moves at a fixed maximum rate (suggest 15 per second) and the decode pipeline targets only the settled position, not every intermediate index.
@@ -337,15 +417,37 @@ Chain per image:
 2. **Display tier.** Embedded preview for RAW; the file itself for JPEG and HEIF; a downscaled decode for large PNG and TIFF. This is the normal filmstrip display source.
 3. **Full resolution.** Only for zoom Tier B, never speculative.
 
-`IImageDecoder` resolves to `LibRawDecoder` or `WicDecoder` by format family at scan time. Callers never branch on file extension.
+~~`IImageDecoder` resolves to `LibRawDecoder` or `WicDecoder` by format family at scan time. Callers never branch on file extension.~~
+
+**As built — the decoder abstraction was never needed, and RAW works differently than planned.** There is no `IImageDecoder`, no `LibRawDecoder` and no `IRawDebayer`. See §5's architecture note. What exists:
+
+- **`ThumbnailService`** — WIC via `Windows.Graphics.Imaging`, for JPEG/PNG and as the RAW fallback. One shared scaled-decode (`DecodeScaledFromStreamAsync`) serves every tier; the tier is just a requested long edge (160 thumbnail / 960 display / viewport-sized zoom).
+- **`RawPreviewDecoder`** — RAW by **embedded-JPEG extraction**, not debayering. It reads a 16 MB scan window, locates embedded JPEG streams by their `FF D8 FF` / `FF D9` markers, sorts candidates smallest-first and decodes the smallest that satisfies the requested edge, then hands those bytes to the very same `ThumbnailService` decode. Vendor-agnostic by design: Sony and Canon store previews at different offsets under different maker-note tags, but both store ordinary JPEG. Costs about 30 ms against roughly 1000 ms for WIC's full debayer of the same file.
+- Callers select between the two on `FormatFamily`, never on file extension — the original intent survives even though the abstraction did not.
+
+**EXIF orientation is applied on both paths, since 2026-08-24.**
+
+- **JPEG and friends:** WIC handles it, via `ExifOrientationMode.RespectExifOrientation`.
+- **RAW:** it must be applied explicitly, and previously was not — **this was a real bug, and portrait RAW files displayed sideways.** The cause is structural rather than an oversight: a RAW's orientation lives in the *container's* TIFF IFD0, and `RawPreviewDecoder` slices an embedded JPEG stream out of that container. The slice leaves the orientation tag behind, so WIC was handed bytes that legitimately claimed to be upright. `ExifOrientation` now reads the tag from the container and passes it into the decode as an explicit override; when one is supplied the stream's own EXIF is deliberately **ignored** rather than combined, so a container whose preview happens to carry its own tag cannot have the rotation applied twice.
+- Measured across the sample corpus: nine files tagged orientation 8 (six `.CR2`, three `.ARW`) decoded 960×640 landscape before the fix and 640×960 portrait after, with the other 92 files unchanged.
+- The mapping covers all eight orientations. Note that WIC applies **flip before rotation**, which is what makes the two mirrored-diagonal values subtle — orientation 5 is a transpose and needs a *vertical* flip before its 90° turn; a horizontal one produces the transverse, which belongs to 7. Neither 5 nor 7 occurs in the sample corpus, so unit tests carry those cases rather than fixtures.
 
 ### 3.3 Prefetch and Cache
-- Sliding window: active index plus 5 ahead, 2 behind, on a bounded worker pool of `min(6, coreCount - 2)`.
-- Direction-aware: the window reverses after three consecutive backwards moves.
+
+**Built 2026-08-23/24 and measured.** Everything in this section is implemented except the VRAM texture cache, which is explicitly marked below. The peak-working-set budget in §3.5 went from **5.25 GB (failing)** to **2.34 GB** against its 4 GB ceiling as a result — see `docs/benchmarks/2026-08-24-ceiling-2gb.md`.
+
+- Sliding window: active index plus 5 ahead, 2 behind, on a bounded worker pool of `min(6, coreCount - 2)`. **Implemented** as `PrefetchWindow` and `DecodeGate` (a `SemaphoreSlim`); 6 workers on a 12-core machine.
+- Direction-aware: the window reverses after three consecutive backwards moves. **Implemented, with one deliberate deviation:** reversal is **symmetric** — three consecutive moves in *either* direction set the orientation. Reverting on a single forward step made the window thrash on any jitter, and a user who steps back three and forward one is still going backwards.
+- **Keep-set is the window UNION the pinned stage, not the window alone.** At nine slots the stage spans ±4, which is *wider* than the −2 lookbehind, so a window-only keep-set would cancel loads the stage had just started, on every navigation.
 - LRU cache with a hard ceiling of **2 GB** system memory, evicting furthest-from-cursor first. Lowered from 3 GB on 2026-08-24: at 3 GB the cache filled and stayed filled, putting the measured peak working set at 3.26 GB against §3.5's 4 GB budget — passing, but with only 16% headroom. The window plus a nine-slot stage is roughly 17 items, so the ceiling governs how much the cache may hoard beyond what it needs, not how much it needs.
-- **VRAM texture cache:** decoded surfaces are uploaded to GPU textures and kept resident. At roughly 130 MB per 33 MP RGBA frame, 8 GB VRAM holds 40 to 50 images, comfortably covering the prefetch window plus zoom history. Eviction is by distance from cursor, with a VRAM budget defaulting to 60% of available.
-- **Dimension guard:** any image whose decoded size would exceed 512 MB in memory (roughly 128 MP at RGBA) is capped at a downscaled decode, with a HUD notice that 1:1 is unavailable. Without this, one stitched panorama TIFF takes the app down.
+  **Implemented** as `PrefetchCoordinator`, evicting furthest-from-cursor first. Two rules the implementation had to add:
+  - **Eviction never disposes.** It drops the last managed reference and lets the GC reclaim. Disposing a `SoftwareBitmap` that XAML may still be copying into a composition surface fail-fasts the process with `0xC000027B`, a bug this project has already paid for once.
+  - **Eviction credits only what it actually frees.** `Evict()` keeps the bottom filmstrip's thumbnail on purpose, so a photo the cursor has passed holds a thumbnail and nothing else and frees *nothing*. Crediting it the full `ResidentBytes` anyway made those items — which sort furthest-from-cursor — absorb the entire sweep while the display tiers that should have been dropped survived. Measured at **133 useless evictions per navigation step** before the fix; 745 total across a 2,000-photo walk after. `ICacheableItem.EvictableBytes` now distinguishes what an item *holds* from what evicting it would *give back*.
+- **VRAM texture cache:** decoded surfaces are uploaded to GPU textures and kept resident. At roughly 130 MB per 33 MP RGBA frame, 8 GB VRAM holds 40 to 50 images, comfortably covering the prefetch window plus zoom history. Eviction is by distance from cursor, with a VRAM budget defaulting to 60% of available. — **NOT IMPLEMENTED.** This is v0.4 scope (§6). Every memory figure in this PRD and in the benchmark files is therefore **system RAM only**; a `SoftwareBitmapSource` additionally copies pixels into a XAML composition surface that may live in GPU memory and is not this process's working set to sample.
+- **Dimension guard:** any image whose decoded size would exceed 512 MB in memory (roughly 128 MP at RGBA) is capped at a downscaled decode, with a HUD notice that 1:1 is unavailable. Without this, one stitched panorama TIFF takes the app down. **Implemented** as `DimensionGuard`, applied at the two places a decode size is chosen — inside `DecodeScaledFromStreamAsync`, where the source dimensions are known, and at the top of the zoom request, where the viewport drives it. It solves for the largest long edge that fits the source's aspect rather than refusing the file. **One substitution:** there is no HUD in v0.1 (§1.8 is unbuilt), so the notice is an on-photo `1:1 UNAVAILABLE — IMAGE TOO LARGE` badge instead.
 - Cache is cleared on folder change, not on session end.
+
+**A tension worth naming:** the 2 GB ceiling and §3.5's 4 GB peak-working-set budget were set independently, and the ceiling is now half the budget. At 3 GB the measured peak was 3.26 GB — passing, but only because the ceiling happened to fit. At 2 GB it is 2.34 GB, with real headroom. The peak sits *above* the ceiling because the ceiling caps resident decoded pixels while the working set also carries roughly 460 MB of baseline process overhead plus transient decode buffers.
 
 ### 3.4 GPU Acceleration
 Three stages, three different answers.
@@ -426,37 +528,109 @@ Writing `xmp:Rating` and `xmp:Label` sidecars in place would let Lightroom Class
 
 ## 5. Architecture
 
+**As built, 2026-08-24.** Four projects in one solution, not one project with a `Benchmarks/` folder.
+
 ```text
-FastCull/
-├── Models/
-│   ├── PhotoItem.cs           # path, rel_path, format, companions, sort time, flag, stars, metadata
-│   ├── FormatFamily.cs        # Raw, Jpeg, Heif, Png, Tiff, Other
-├── Services/
-│   ├── FormatRegistry.cs      # extension -> family -> decoder mapping, single source of truth
-│   ├── DirectoryScanner.cs    # streaming discovery, parallel metadata parse, companion grouping
-│   ├── IImageDecoder.cs       # thumbnail / display / full contract
-│   │   ├── LibRawDecoder.cs   # RAW primary
-│   │   └── WicDecoder.cs      # everything else, plus RAW fallback
-│   ├── IRawDebayer.cs         # CpuDebayer now, GpuDebayer later
-│   ├── ThumbnailService.cs    # extract or generate, cache as blob in session DB
-│   ├── PreviewCache.cs        # prefetch window, LRU, RAM + VRAM ceilings, dimension guard, cancellation
-│   ├── SessionStore.cs        # SQLite WAL, batched background writer, resume
-│   ├── UndoStack.cs           # command pattern over rating and delete ops
-│   ├── BatchProcessor.cs      # copy/move, collisions, verify, cancel, log
-│   ├── XmpWriter.cs           # stub for v1.1
-├── ViewModels/
-│   ├── MainViewModel.cs       # sequence, cursor, input state machine, key coalescing
-│   ├── FinishSessionViewModel.cs
-├── Views/
-│   ├── MainWindow.xaml
-│   ├── FilmstripView.xaml     # ItemsRepeater, horizontal virtualization
-│   ├── ZoomView.xaml
-│   ├── MetadataHud.xaml
-├── Benchmarks/
-│   ├── PerfHarness.cs         # asserts section 3.5 budgets against RAW / JPEG / mixed fixtures
+Fastcull.sln
+│
+├── Fastcull.Core/              # headless logic. NO WinUI reference. UseWinUI=false.
+│   │                           #   Exists because the WinUI project CANNOT be referenced from a
+│   │                           #   test project - its MSIX targets refuse to build
+│   │                           #   ProcessorArchitecture-neutral. Anything that needs testing
+│   │                           #   lives here; that constraint shaped the whole layout.
+│   ├── Input/
+│   │   └── InputRouter.cs      # pure key -> command resolution, incl. the NumLock/numpad split
+│   ├── Models/
+│   │   ├── CullState.cs        # the 8-rung ladder (§1.6); invalid pairs throw
+│   │   ├── Rotation.cs         # quarter-turn delta (§1.11)
+│   │   ├── CullTally.cs        # sidebar session counts (§1.5)
+│   │   ├── FolderTree.cs       # sidebar folder tree + flattening (§1.5)
+│   │   └── FormatBreakdown.cs  # sidebar per-extension counts (§1.5)
+│   ├── Services/
+│   │   ├── DirectoryScanner.cs # streaming discovery via IAsyncEnumerable + Channel (§1.2)
+│   │   ├── ThumbnailService.cs # WIC scaled decode, all tiers (§3.2)
+│   │   ├── RawPreviewDecoder.cs# RAW via embedded-JPEG extraction (§3.2) - replaces LibRawDecoder
+│   │   ├── ExifOrientation.cs  # container orientation -> WIC flip+rotation (§3.2)
+│   │   ├── DecodeGate.cs       # bounded worker pool, min(6, cores-2) (§3.3)
+│   │   ├── DimensionGuard.cs   # 512 MB decode ceiling (§3.3)
+│   │   └── SessionStore.cs     # SQLite WAL, batched background writer, resume (§3.1)
+│   └── ViewModels/             # view-model logic that needs no XAML
+│       ├── FilmstripWindow.cs  # the stage window rule (§1.5)
+│       ├── StageLayout.cs      # equal-height rule + slot count (§1.5)
+│       ├── PrefetchWindow.cs   # +5/-2 sliding window, direction reversal (§3.3)
+│       ├── PrefetchCoordinator.cs # LRU eviction at the ceiling (§3.3)
+│       └── ICacheableItem.cs   # the seam that makes eviction testable at all
+│
+├── Fastcull/                   # the WinUI 3 app (Fastcull.csproj, at repo root)
+│   ├── App.xaml(.cs)           # theme dictionaries, crash logging to a fixed temp path
+│   ├── MainWindow.xaml(.cs)    # black title bar, window-level key routing, sidebar host
+│   ├── Themes/
+│   │   └── Nocturne.xaml       # the Chromeless palette: neutral + accent ramps, pick/reject,
+│   │                           #   Inter font stack, spacing scale, borderless button template
+│   ├── Converters/
+│   │   ├── ChromelessConverters.cs  # CullStateToWeightBarBrush, ThumbnailMarkBrush,
+│   │   │                            #   BoolToAccentBrush, BoolToCaptionBrush,
+│   │   │                            #   BoolToVisibility, BoolToCollapsed,
+│   │   │                            #   BoolToThumbnailOpacity
+│   │   └── SlotConverters.cs        # ItemToVisibility
+│   ├── ViewModels/
+│   │   ├── MainViewModel.cs         # sequence, cursor, stage window, command execution
+│   │   ├── FilmstripItemViewModel.cs# per-photo decode tiers, cull state, rotation
+│   │   ├── SidebarViewModel.cs      # §1.5 panel: tallies, formats, folder tree, pin, scan pill
+│   │   └── SidebarRowViewModels.cs  # folder + format row types
+│   └── Views/
+│       ├── FilmstripView.xaml(.cs)  # stage + bottom strip, both ItemsRepeater
+│       └── SidebarView.xaml(.cs)    # the left panel
+│
+├── Fastcull.Tests/             # xunit, references Fastcull.Core only. 333 tests.
+│   └── (one file per Core type: CullState, Rotation, InputRouter, DirectoryScanner,
+│        RawPreviewDecoder, SessionStore, StageLayout, FilmstripWindow, DecodeGate,
+│        Prefetch, DimensionGuard, ExifOrientation, CullTally, FolderTree, FormatBreakdown)
+│
+└── Fastcull.Benchmarks/        # separate console project, NOT a folder in the app
+    ├── PerfHarness.cs          # asserts the §3.5 budgets against RAW / JPEG / mixed fixtures
+    ├── WindowedCullSimulation.cs # replays the §3.3 architecture over 2,000 files
+    ├── SyntheticCorpus.cs      # 2,000 NTFS hard links over the real sample files
+    ├── FixtureSets.cs, BudgetResult.cs, MarkdownReport.cs, Program.cs
+    └── (writes docs/benchmarks/*.md)
 ```
 
+**Deliberate architecture changes from the original tree — these are decisions, not gaps:**
+
+| Planned | Actual | Why |
+| :--- | :--- | :--- |
+| `IImageDecoder` + `LibRawDecoder` + `WicDecoder` | `ThumbnailService` (WIC) + `RawPreviewDecoder` | The abstraction earned nothing: there are two concrete decoders, callers pick on `FormatFamily`, and both funnel into one shared scaled-decode. An interface over two implementations that share their entire back half is ceremony |
+| `IRawDebayer` (`CpuDebayer` now, `GpuDebayer` later) | **Nothing.** `RawPreviewDecoder` extracts the embedded JPEG | **The real, working, shipping RAW path.** §1.7's survey found 100% of surveyed RAW files carry a full-sensor-width embedded JPEG, making debayering unnecessary for every tier the app uses — at ~30 ms versus ~1000 ms. True debayering was never built. This is an upgrade path, not a hole (see `docs/BACKLOG.md`) |
+| `PreviewCache.cs` (one file) | `DecodeGate` + `DimensionGuard` + `PrefetchWindow` + `PrefetchCoordinator` + `ICacheableItem` | Split by what needs WinUI and what does not. That split is what makes the cache logic testable at all — a single WinUI-side file would have been untestable |
+| `FormatRegistry.cs` | The extension→family map inside `DirectoryScanner` | One consumer, so far |
+| `Models/PhotoItem.cs` | `ScannedPhoto` (scan output) + `FilmstripItemViewModel` (UI state) | The single fat model in §5.1 was never built; scan facts and UI state have different lifetimes |
+| `Benchmarks/` inside the app | `Fastcull.Benchmarks` console project | A benchmark harness inside an MSIX-packaged WinUI app cannot be run headlessly |
+| `ZoomView.xaml`, `MetadataHud.xaml`, `FinishSessionViewModel.cs`, `UndoStack.cs`, `BatchProcessor.cs`, `XmpWriter.cs` | **Not built** | Zoom is a mode of `FilmstripView`, not its own view (§1.7). The rest are unbuilt features — §1.8, §1.9, §4 |
+
 ### 5.1 Model
+
+> **Status, 2026-08-24: `PhotoItem` as written below was never built**, and the design below is
+> retained as the target shape rather than a description of the code. What exists instead:
+>
+> - **`ScannedPhoto`** (`Fastcull.Core/Services/DirectoryScanner.cs`) — the scan's output, and a
+>   strict subset: `FilePath`, `RelativePath`, `FileName`, `Family`, `FileBytes`, `SortTime`,
+>   `SortTimeSource`, `CaptureSubsec`. It deliberately carries **no** rating, no companions and no
+>   camera metadata.
+> - **`CullState`** (`Fastcull.Core/Models/CullState.cs`) — replaces the loose `Flag` + `Stars`
+>   pair with the single ordered ladder of §1.6. Invalid combinations throw from the constructor
+>   rather than being silently normalised, which is how the invariants below are actually enforced.
+> - **`Rotation`** (`Fastcull.Core/Models/Rotation.cs`) — §1.11's quarter-turn delta, which the
+>   model below predates entirely.
+> - **`FilmstripItemViewModel`** (WinUI project) — per-photo UI state: decode tiers, cull state,
+>   rotation, pin and residency for §3.3.
+>
+> The split is deliberate: scan facts are immutable and cheap, UI state is mutable and expensive,
+> and the metadata cache the fat model implies is not built (see `docs/BACKLOG.md`). `Companions`
+> and every metadata field below are unimplemented — companion pairing is §1.4, still an open
+> question, and the metadata fields belong to the unbuilt HUD (§1.8). `FullResIsCheap` exists only
+> as the design below; nothing calls it, because the single embedded-preview path (§3.2) never
+> branches on it yet.
+
 ```csharp
 public enum Flag { Unflagged = 0, Picked = 1, Rejected = 2 }
 
@@ -545,13 +719,13 @@ Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate comm
 | :--- | :--- | :--- |
 | ~~A7C II embedded preview is undersized~~ **Closed 2026-08-23** | Would have made every RAW zoom take the slow Tier B path | Checked, and thoroughly: 96 files across two bodies, 100% carry a full-sensor-width preview, so RAW zoom is Tier A (1.7). Residual risk is quality, not size, and is unmeasurable until zoom exists in v0.2 |
 | No debayer exists if a Tier-B RAW file is ever encountered | A RAW file whose preview falls below the `FullResIsCheap` threshold has **no** full-resolution decode path at all, and would stay on the upscaled preview indefinitely | Accepted for now — the surveyed corpus has no such file. `FullResIsCheap` already routes correctly; only the destination is missing. Spike `Magick.NET-Q16-HDRI-x64` if one ever appears (3.4) |
-| RAW decoder NuGet package unmaintained or missing RAW delegate | Blocked on the core format | Ten-minute spike before v0.1 slice 3; JPEG/PNG path via WIC is unaffected |
-| WIC RAW codec absent on target machine | Cannot open RAW at all | LibRaw primary for RAW |
+| ~~RAW decoder NuGet package unmaintained or missing RAW delegate~~ **Closed 2026-08-23** | Blocked on the core format | Moot: no RAW library is a dependency. `RawPreviewDecoder` extracts the embedded JPEG using only in-box WIC (§3.2, §5.2) |
+| WIC RAW codec absent on target machine | Cannot open RAW at all | ~~LibRaw primary for RAW~~ — **mitigation no longer accurate.** The shipped path does not need a WIC *RAW* codec at all: it slices an embedded JPEG out of the container and decodes that as ordinary JPEG. The residual risk is narrower — a RAW variant whose preview this scanner cannot locate |
 | PNG and TIFF have no embedded thumbnail | Scan of a large PNG folder becomes a full decode storm | Generate once, cache as blob, downscaled decode only |
 | Huge TIFF or stitched panorama | Out-of-memory crash | Dimension guard in 3.3, hard 512 MB decoded ceiling |
 | `ItemsRepeater` horizontal virtualization with variable-width items | Filmstrip stutter, the one thing the app cannot afford | Fixed height, aspect-derived width, measured in v0.1 with 2,000 fixtures |
-| **EXIF orientation is applied for JPEG but not for RAW** | A portrait JPEG displays upright while a portrait RAW displays sideways. In Paired mode (§1.4) the same frame displays differently depending on which file is the display source | Measured 2026-08-23: `ThumbnailService` passes `RespectExifOrientation`, so WIC orients the file it is handed. The RAW path hands it an *embedded preview*, and those previews carry no orientation tag of their own (verified across `.ARW` and `.CR2`), while the RAW container's tag is never read. Unproven either way: whether a camera stores a portrait RAW's preview already rotated — the sample corpus is entirely landscape, orientation 1 |
-| Fixing RAW orientation later invalidates rotations already stored against the old baseline | A photo the user manually straightened would become double-corrected | Bounded set: only RAW files whose EXIF orientation is not 1 **and** which the user has already rotated by hand. Empty today. If it needs closing, store the decode-time baseline beside the delta (one extra column) — far cheaper before a few thousand photos are rotated than after |
+| ~~**EXIF orientation is applied for JPEG but not for RAW**~~ **Closed 2026-08-24** | A portrait JPEG displayed upright while a portrait RAW displayed sideways | Fixed. `ExifOrientation` reads the tag from the RAW *container* and passes it into the decode as an explicit override (§3.2). The earlier note that "the sample corpus is entirely landscape, orientation 1" was **wrong**: a full re-survey found nine portrait files tagged orientation 8 — six `.CR2`, three `.ARW` — all of which decoded landscape before the fix and portrait after |
+| ~~Fixing RAW orientation later invalidates rotations already stored against the old baseline~~ **Closed 2026-08-24, no action needed** | A photo the user manually straightened would become double-corrected | The delta design in §1.11 absorbed it exactly as intended: baselines turned, deltas stayed correct, no migration and no extra column. The bounded set it worried about turned out to be empty in practice |
 | NumLock ambiguity on numpad rating keys | Ratings silently do nothing | Explicit test case in v0.1 |
 | Unbounded decode jobs on fast scrubbing | Thread pool starvation | Cancellation tokens, coalesced navigation, bounded worker pool |
 | Scope creep past v0.3 | Never ships | Phase gates above |
