@@ -4,6 +4,7 @@ using System.Collections.Specialized;
 using System.ComponentModel;
 using System.IO;
 using System.Threading.Tasks;
+using Fastcull.Input;
 using Fastcull.ViewModels;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
@@ -366,9 +367,20 @@ namespace Fastcull.Views
             return new Point(p.X - frame.ActualWidth / 2, p.Y - frame.ActualHeight / 2);
         }
 
+        /// <summary>
+        /// The wheel over the stage means one of two things, and the mode decides which
+        /// (PRD 1.7.2): zoom scale while zoomed, cull-ladder steps while not.
+        ///
+        /// **The bottom filmstrip is unaffected, and that is structural rather than a guard here.**
+        /// This handler is attached to StageHost, which is Grid.Row 0; the filmstrip band is
+        /// Grid.Row 1 - its *sibling*, not its child. A wheel event over the strip is handled by
+        /// the strip's own ScrollViewer and never routes through this element at all. A check of
+        /// the form "only if not zoomed" would not have been enough: it would still fire for the
+        /// strip, and scrolling to hunt for a photo would silently re-rate the selected one.
+        /// </summary>
         private void StageHost_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
         {
-            if (!ViewModel.IsZoomed || ViewModel.ActiveItem is null) return;
+            if (ViewModel.ActiveItem is null) return;
 
             var delta = e.GetCurrentPoint(StageHost).Properties.MouseWheelDelta;
             if (delta == 0) return;
@@ -376,6 +388,17 @@ namespace Fastcull.Views
             // One notch is 120; a high-resolution wheel can report fractions of that, and dividing
             // would round them to zero and make the wheel feel dead. Sign is enough.
             var steps = delta > 0 ? 1 : -1;
+
+            if (!ViewModel.IsZoomed)
+            {
+                // Same command as W/S and Up/Down, at the same one-rung-per-notch granularity -
+                // a third way to reach the identical action, for a hand already on the mouse.
+                ViewModel.Execute(new ResolvedInput(
+                    steps > 0 ? AppCommand.LadderUp : AppCommand.LadderDown, 0));
+
+                e.Handled = true;
+                return;
+            }
 
             // Anchor to the pointer when it is over the photo; fall back to the centre when it is
             // over the letterbox, which zooms without a preferred point rather than doing nothing.

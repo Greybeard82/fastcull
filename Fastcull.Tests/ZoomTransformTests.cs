@@ -31,14 +31,29 @@ public class ZoomTransformTests
         => Assert.Equal(1.2, ZoomTransform.SteppedScale(1.0, 1), 6);
 
     [Fact]
-    public void TenStepsUpReachesTheCeilingExactly()
-        => Assert.Equal(3.0, ZoomTransform.SteppedScale(1.0, 10), 6);
+    public void FifteenStepsUpReachesTheCeilingExactly()
+    {
+        // Raised from ten steps / 300% on 2026-08-24 (PRD 1.7.1). "Exactly" is the assertion that
+        // matters: 1.0 plus fifteen 0.2s is 3.9999999999999996 in binary floating point, so this
+        // only passes because SteppedScale snaps to the step grid.
+        Assert.Equal(4.0, ZoomTransform.SteppedScale(1.0, 15), 6);
+        Assert.Equal(3.8, ZoomTransform.SteppedScale(1.0, 14), 6);
+    }
 
     [Fact]
-    public void ScaleStopsAtThreeHundredPercent()
+    public void ScaleStopsAtFourHundredPercent()
     {
-        Assert.Equal(3.0, ZoomTransform.SteppedScale(3.0, 1), 6);
-        Assert.Equal(3.0, ZoomTransform.SteppedScale(1.0, 50), 6);
+        Assert.Equal(4.0, ZoomTransform.SteppedScale(4.0, 1), 6);
+        Assert.Equal(4.0, ZoomTransform.SteppedScale(1.0, 50), 6);
+    }
+
+    [Fact]
+    public void TheBandAboveThreeHundredPercentIsNowReachable()
+    {
+        // The actual behaviour change, stated directly: what used to be the ceiling is now an
+        // ordinary rung with five more above it.
+        Assert.Equal(3.2, ZoomTransform.SteppedScale(3.0, 1), 6);
+        Assert.Equal(3.6, ZoomTransform.SteppedScale(3.0, 3), 6);
     }
 
     [Fact]
@@ -90,7 +105,7 @@ public class ZoomTransformTests
     [Fact]
     public void ClampingAlsoConstrainsScaleItself()
     {
-        Assert.Equal(3.0, new ZoomTransform(10, 0, 0).Clamped(W, H).Scale, 6);
+        Assert.Equal(4.0, new ZoomTransform(10, 0, 0).Clamped(W, H).Scale, 6);
         Assert.Equal(1.0, new ZoomTransform(0.1, 0, 0).Clamped(W, H).Scale, 6);
     }
 
@@ -187,12 +202,14 @@ public class ZoomTransformTests
     [Fact]
     public void TheAnchorHoldsAcrossAWholeScrollUp()
     {
-        // Ten notches at a fixed cursor, checking the invariant at every step - the case where a
-        // per-step error accumulates into something obvious.
+        // Fifteen notches at a fixed cursor, checking the invariant at every step - the case where
+        // a per-step error accumulates into something obvious. Raising the ceiling to 400% added
+        // five more steps for that error to compound over, which is the point of re-running it
+        // over the full new range rather than just changing the final assertion.
         const double cursorX = 250, cursorY = 90;
         var t = ZoomTransform.Identity;
 
-        for (var i = 0; i < 10; i++)
+        for (var i = 0; i < 15; i++)
         {
             var pinned = ImagePointAt(t, cursorX, cursorY);
             var next = t.ScaledAt(cursorX, cursorY, 1, W, H);
@@ -213,15 +230,38 @@ public class ZoomTransformTests
             t = next;
         }
 
-        Assert.Equal(3.0, t.Scale, 6);
+        Assert.Equal(4.0, t.Scale, 6);
+    }
+
+    [Fact]
+    public void TheAnchorStillHoldsOnTheFinalStepIntoTheNewCeiling()
+    {
+        // The specific worry with a raised ceiling: that the last notch before the rail anchors
+        // differently from the ones before it. 3.8 -> 4.0 is an ordinary step and must behave like
+        // one - the point under the cursor stays under the cursor.
+        const double cursorX = 120, cursorY = 40;
+        var before = new ZoomTransform(3.8, 0, 0);
+
+        var pinned = ImagePointAt(before, cursorX, cursorY);
+        var after = before.ScaledAt(cursorX, cursorY, 1, W, H);
+
+        Assert.Equal(4.0, after.Scale, 6);
+
+        // Guard the guard: an anchor assertion is vacuous if the clamp silently took over.
+        Assert.True(Math.Abs(after.OffsetX) < ZoomTransform.MaxOffset(W, after.Scale) - Tol,
+            "expected this step to be anchor-driven rather than clamped");
+
+        var moved = ScreenPointOf(after, pinned.X, pinned.Y);
+        Assert.Equal(cursorX, moved.X, 5);
+        Assert.Equal(cursorY, moved.Y, 5);
     }
 
     [Fact]
     public void ZoomingAtTheCeilingChangesNothingAtAll()
     {
-        var at3x = new ZoomTransform(3.0, 200, 100);
+        var at4x = new ZoomTransform(4.0, 200, 100);
 
-        Assert.Equal(at3x, at3x.ScaledAt(500, 300, 1, W, H));
+        Assert.Equal(at4x, at4x.ScaledAt(500, 300, 1, W, H));
     }
 
     [Fact]
@@ -236,11 +276,11 @@ public class ZoomTransformTests
         // The clamp does this on its own: at scale 1 the pannable range is zero, so any offset
         // accumulated on the way up is pulled back to centre on the way down.
         var t = ZoomTransform.Identity;
-        for (var i = 0; i < 10; i++) t = t.ScaledAt(800, 400, 1, W, H);
+        for (var i = 0; i < 15; i++) t = t.ScaledAt(800, 400, 1, W, H);
 
         Assert.True(Math.Abs(t.OffsetX) > 0, "expected the zoom-in to have moved off centre");
 
-        for (var i = 0; i < 10; i++) t = t.ScaledAt(800, 400, -1, W, H);
+        for (var i = 0; i < 15; i++) t = t.ScaledAt(800, 400, -1, W, H);
 
         Assert.Equal(1.0, t.Scale, 6);
         Assert.Equal(0, t.OffsetX, 6);

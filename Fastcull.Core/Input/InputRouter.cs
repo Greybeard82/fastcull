@@ -14,11 +14,12 @@ namespace Fastcull.Input
         LadderDown,
         SetStars,        // payload 0-5
 
-        // Direct flag-set commands. UNBOUND as of the 2026-08-24 one-handed revamp: C/P/Z/X/U
-        // were removed and nothing replaced them, so the ladder is reachable only by stepping
-        // (PRD 2.1.1 records the consequence). The members are kept because they are the model's
-        // vocabulary and CullState still implements the transitions - reintroducing a direct-set
-        // key later is a binding, not a rewrite.
+        // Direct flag-set commands, bound to C / Z / X (PRD 2.1.1). Briefly unbound during the
+        // first pass of the one-handed revamp; restored once stepping alone proved too slow to
+        // reject a highly-rated photo.
+        //
+        // Note SetPicked means Picked with stars RESET, not CullState.AsPicked() - see the
+        // handler in MainViewModel.
         SetPicked,
         SetRejected,
         SetUnflagged,
@@ -91,6 +92,15 @@ namespace Fastcull.Input
                 case VirtualKey.W: return new ResolvedInput(AppCommand.LadderUp, 0);
                 case VirtualKey.S: return new ResolvedInput(AppCommand.LadderDown, 0);
 
+                // ---- Direct-set flags, restored 2026-08-24 on the bottom row ----
+                //
+                // These JUMP to a rung; W/S step to one. Both stay available (PRD 2.1.1) - the
+                // first pass of the revamp removed every direct-set key and reaching Rejected
+                // from five stars became seven presses of S, which is what brought them back.
+                case VirtualKey.Z: return new ResolvedInput(AppCommand.SetRejected, 0);
+                case VirtualKey.X: return new ResolvedInput(AppCommand.SetUnflagged, 0);
+                case VirtualKey.C: return new ResolvedInput(AppCommand.SetPicked, 0);
+
                 // ---- Rotation, moved off A/S onto the row above (PRD 1.11) ----
                 case VirtualKey.Q: return new ResolvedInput(AppCommand.RotateLeft, 0);
                 case VirtualKey.E: return new ResolvedInput(AppCommand.RotateRight, 0);
@@ -106,8 +116,13 @@ namespace Fastcull.Input
                 // ---- Folder picker (PRD 1.1.1) ----
                 case VirtualKey.G: return new ResolvedInput(AppCommand.OpenFolder, 0);
 
-                // ---- Zoom. Space toggles; Escape was removed with the revamp ----
+                // ---- Zoom ----
+                //
+                // Space toggles both ways; Escape only ever exits. That asymmetry is the point of
+                // having both: Escape can be hit reflexively without any risk of being the key
+                // that puts you INTO zoom. ExitZoom is a no-op when not zoomed.
                 case VirtualKey.Space: return new ResolvedInput(AppCommand.ToggleZoom, 0);
+                case VirtualKey.Escape: return new ResolvedInput(AppCommand.ExitZoom, 0);
 
                 // ---- Recycle Bin (PRD 2.1.2) ----
                 case VirtualKey.Delete: return new ResolvedInput(AppCommand.DeletePhoto, 0);

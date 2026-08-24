@@ -264,9 +264,9 @@ Because the zoom is fit-to-stage rather than 1:1, it answers "is this frame shar
 
 Fit-to-stage is the floor, not the ceiling. The mouse drives a scale factor on top of it, so a detail can be enlarged without leaving zoom mode.
 
-**Scale, by mouse wheel:**
+**Scale, by mouse wheel — while zoomed:**
 
-- **Wheel up** increases scale in **20% increments**, to a maximum of **300%**.
+- **Wheel up** increases scale in **20% increments**, to a maximum of **400%** (raised from 300% on 2026-08-24; fifteen notches from floor to ceiling).
 - **Wheel down** decreases scale in 20% increments, to a floor of **100%** — which is the existing fit-to-stage level the `Space` bar already produces. 100% is a floor, not a midpoint: there is no zooming out past the fit.
 - **Scale anchors to the cursor, not to the image centre.** The image point under the pointer before the scale change is the same point under the pointer after it. Scrolling into a detail keeps that detail where it is; recentring on the image middle would push whatever the user was looking at off toward the edge, which is the opposite of the intent.
 
@@ -281,6 +281,21 @@ Fit-to-stage is the floor, not the ceiling. The mouse drives a scale factor on t
 **Reset:** scale and pan reset to 100% and centred on **every entry to zoom** and on **every change of photo while zoomed**. Carrying a 300% scale onto the next photo would drop the user into a corner of a frame they have not seen yet, with no cue as to where in it they are.
 
 **Overlays are unaffected by scale and pan.** The info overlay (§1.8.1, lower-left) and the loading indicator (§1.7, lower-right) are anchored to the viewport, not to the image, so they hold their corners at any scale or offset rather than sliding off with the photo.
+
+#### 1.7.2 The wheel means two different things, and the region decides which
+
+The mouse wheel is overloaded, and the boundary is **which region the pointer is over**, not what mode the app is in:
+
+| Pointer is over | Not zoomed | Zoomed |
+| :--- | :--- | :--- |
+| **The stage** | Steps the cull ladder — one rung per notch, up for wheel-up | Changes the zoom scale (§1.7.1) |
+| **The bottom filmstrip** | Scrolls thumbnails. Never touches the rating or the selection | Scrolls thumbnails (the strip is hidden while zoomed) |
+
+**Wheel over the stage, unzoomed, steps the ladder.** Wheel-up is `CullState.Up()` and wheel-down is `CullState.Down()` — the identical action to `W`/`S` and `Up`/`Down`, at identical granularity of one rung per notch. It is a third way to reach the same command, for a hand already on the mouse.
+
+**The filmstrip's wheel behaviour is untouched and must stay that way.** §2.4 makes the bottom strip mouse-only and deliberately isolated: scrolling it browses thumbnails and *never* moves the top selection. Adding a rating action to the wheel must not leak into it — scrolling the strip while hunting for a photo would otherwise silently re-rate whatever happened to be selected, which is both destructive and invisible.
+
+**That isolation is enforced by element ownership, not by a mode check.** The stage's wheel handler is attached to the stage container, and the filmstrip is its *sibling* in the layout, not its child — so a wheel event over the strip is handled by the strip's own scroller and never reaches the stage handler at all. A guard of the form "only if not zoomed" would not be sufficient, because it would still fire for the strip; the tree shape is what makes the boundary real.
 
 **Zoom-percentage indicator.** The current scale reads as a percentage — `180%` — in the **lower-left**, beside where the info overlay sits.
 
@@ -376,13 +391,17 @@ The organising idea is that the two axes a cull actually uses — **which photo*
 | `D` | **Next photo** |
 | `W` | **Rate up** — one step up the cull ladder (§1.6), clamped at 5 stars |
 | `S` | **Rate down** — one step down the ladder, clamped at Rejected |
+| `Z` | Set **Rejected** directly — ladder rung 0 |
+| `X` | Set **Unrated** directly — ladder rung 1 |
+| `C` | Set **Picked** directly — ladder rung 2, **always resetting stars to 0** |
 | `Q` | Rotate the selected photo 90° **counter-clockwise** (§1.11) |
 | `E` | Rotate the selected photo 90° **clockwise** (§1.11) |
 | `R` | Jump to the **first** photo in the sequence |
 | `T` | Jump to the **last** photo in the sequence |
 | `F` | Toggle the on-photo info overlay (§1.8.1) |
 | `G` | Open the folder picker (§1.1.1) — the same action as the sidebar's **CHANGE FOLDER** control |
-| `Space` | Toggle zoom mode (§1.7) |
+| `Space` | Toggle zoom mode (§1.7) — enters **and** exits |
+| `Esc` | Exit zoom. **Exit only** — pressing it outside zoom does nothing, so it can never be the key that puts you into zoom by accident |
 | `Delete` | Move the selected photo to the **Recycle Bin** (§2.1.2) |
 | `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
 | `Left` / `Right` | Previous / next photo — arrow-key equivalents of `A` / `D` |
@@ -397,24 +416,42 @@ The organising idea is that the two axes a cull actually uses — **which photo*
 
 Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of every accelerator, and its key-repeat behaviour is inconsistent.
 
-#### 2.1.1 What the revamp removed, and the one real consequence
+#### 2.1.1 The final matrix: what moved, what returned, what is gone
 
-These were all live before 2026-08-24 and now do nothing at all. They are unmapped keys like any other — logged at debug level, otherwise ignored:
+The revamp landed in two passes. The first rebuilt the map around `WASD` and removed every direct-set key; the second put three of them back on `Z`/`X`/`C` after the consequence below proved real in use.
+
+**Two ways to move the rating, both live.** They are complementary, not alternatives:
+
+| | Keys | Behaviour |
+| :--- | :--- | :--- |
+| **Step** | `W` / `S`, `Up` / `Down` | One rung at a time along the eight-state ladder (§1.6) |
+| **Jump** | `Z` / `X` / `C` | Straight to a flag, regardless of the current rung |
+
+The jump keys sit together under the left hand on the bottom row, within the same hand position as `WASD`.
+
+| Key | Result | Stars |
+| :--- | :--- | :--- |
+| `Z` | `Rejected` (rung 0) | Forced to 0 |
+| `X` | `Unflagged` (rung 1) | Forced to 0 |
+| `C` | `Picked` (rung 2) | **Reset to 0** |
+
+- **`Z` and `X` clear stars because §1.6's invariants require it**, not as a design choice: `Rejected ⇒ Stars == 0` and `Unflagged ⇒ Stars == 0` are asserted in `CullState`'s constructor, and the pairs are simply not representable. There is no version of `Z` that keeps stars.
+- **`C` resets stars deliberately, and this differs from the pre-revamp `P`/`C`.** The old binding called `AsPicked()`, which is a *no-op* on a photo already at 3–7 rungs — pressing it on a 4-star photo left it at 4 stars. `C` now always lands on `Picked`/0, so it is a reliable "demote to plain picked" rather than a key whose effect depends on where you already were.
+
+**Still gone, and confirmed dead rather than quietly working:**
 
 | Removed | Was | Replacement |
 | :--- | :--- | :--- |
-| `C`, `P` | Set `Picked` directly | **None** — see below |
-| `Z`, `X` | Set `Rejected` directly | **None** — see below |
-| `U` | Set `Unrated` directly | **None** — see below |
-| `0` / `NumPad0` | Clear stars, keeping the flag | **None** |
+| `P` | Set `Picked` | `C` |
+| `U` | Set `Unrated` | `X` |
+| `0` / `NumPad0` | Clear stars, keeping the flag | **None** — `X` clears the rating outright, but nothing strips stars while keeping `Picked` |
 | `A` (old) | Rotate counter-clockwise | `Q` |
 | `S` (old) | Rotate clockwise | `E` |
 | `Home` / `End` | First / last photo | `R` / `T` |
-| `Esc` | Exit zoom | `Space`, which toggles |
 
-**The consequence worth stating plainly: there is no longer any way to jump directly to a flag.** Reaching `Rejected` from a 5-star photo previously took one keypress (`Z`); it now takes seven presses of `S`, walking the ladder down rung by rung. The same applies to `Picked` and to clearing a rating.
+**`Esc` returned, as an exit only.** `Space` toggles zoom in both directions; `Esc` only ever leaves it. Pressing `Esc` outside zoom does nothing at all, so the key can never be what puts you *into* zoom — which is the asymmetry that makes it safe to hit reflexively.
 
-That is a deliberate outcome of a map built around one hand and a single stepping axis, not an oversight. It is recorded here because it is the kind of trade that looks like a bug later: if rapid rejection turns out to matter more than the one-handed layout, the fix is to reintroduce a direct-set key rather than to assume `S` was meant to behave differently.
+**The one loss that remains:** there is still no way to strip stars from a photo while keeping it `Picked`. `C` does it by resetting to rung 2, which is the same end state, so this only matters if "picked, no stars" and "picked, stars cleared" ever need to be distinguished — today they do not.
 
 #### 2.1.2 Delete
 
@@ -464,10 +501,12 @@ The designed `A`/`D` row above wanted *zoom-preserving* navigation as a zoom-onl
 
 | Input | Behaviour |
 | :--- | :--- |
-| `Wheel up` | Scale +20% per step, capped at 300%, anchored to the cursor |
+| `Wheel up` | Scale +20% per step, capped at **400%**, anchored to the cursor |
 | `Wheel down` | Scale −20% per step, floored at 100% (fit-to-stage) |
 | `Left-drag` | Pan the image, clamped to its own edges. Above 100% only |
 | `Left-drag` at 100% | No-op — the image already fits |
+
+Unzoomed, the same wheel over the same region steps the cull ladder instead — see §1.7.2 for that split and for why the bottom filmstrip is unaffected by it.
 
 The zoom percentage (§1.7.1) appears in the lower-left while scale is above 100%. It is **not** on the `I` toggle: `I` shows metadata about the photo, the percentage shows where the view is, and one should not be hidden behind the other.
 

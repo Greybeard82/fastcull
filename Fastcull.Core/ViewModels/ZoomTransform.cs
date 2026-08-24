@@ -23,9 +23,10 @@ namespace Fastcull.ViewModels
         /// <summary>PRD 1.7.1: 100% is a floor, not a midpoint. There is no zooming out past the fit.</summary>
         public const double MinScale = 1.0;
 
-        public const double MaxScale = 3.0;
+        /// <summary>Raised from 300% on 2026-08-24 (PRD 1.7.1).</summary>
+        public const double MaxScale = 4.0;
 
-        /// <summary>One wheel notch. 20% per PRD 1.7.1 - ten steps from floor to ceiling.</summary>
+        /// <summary>One wheel notch. 20% per PRD 1.7.1 - fifteen steps from floor to ceiling.</summary>
         public const double ScaleStep = 0.2;
 
         /// <summary>Floating-point slack for "is this exactly 100%".</summary>

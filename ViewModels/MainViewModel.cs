@@ -520,7 +520,11 @@ namespace Fastcull.ViewModels
                 case AppCommand.LadderUp: ApplyRating(s => s.Up()); break;
                 case AppCommand.LadderDown: ApplyRating(s => s.Down()); break;
                 case AppCommand.SetStars: ApplyRating(s => s.WithStars(input.Payload)); break;
-                case AppCommand.SetPicked: ApplyRating(s => s.AsPicked()); break;
+                // Picked with stars RESET, not CullState.AsPicked() - which is a no-op on a photo
+                // already at 3-7 rungs and so leaves a 4-star photo at 4 stars. PRD 2.1.1 wants C
+                // to be a reliable "demote to plain picked" whose effect does not depend on where
+                // the photo already was.
+                case AppCommand.SetPicked: ApplyRating(_ => new CullState(Flag.Picked, 0)); break;
                 case AppCommand.SetRejected: ApplyRating(s => s.AsRejected()); break;
                 case AppCommand.SetUnflagged: ApplyRating(s => s.AsUnflagged()); break;
 

@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Fastcull.Input;
 using Windows.System;
 using Xunit;
@@ -173,13 +174,9 @@ public class InputRouterTests
     // ---- Everything the revamp removed is genuinely dead ----
 
     [Theory]
-    [InlineData(VirtualKey.P)]        // was SetPicked
-    [InlineData(VirtualKey.C)]        // was SetPicked
-    [InlineData(VirtualKey.X)]        // was SetRejected
-    [InlineData(VirtualKey.Z)]        // was SetRejected
-    [InlineData(VirtualKey.U)]        // was SetUnflagged
-    [InlineData(VirtualKey.Number0)]  // was clear-stars
-    [InlineData(VirtualKey.Escape)]   // was ExitZoom
+    [InlineData(VirtualKey.P)]        // was SetPicked - C replaced it
+    [InlineData(VirtualKey.U)]        // was SetUnflagged - X replaced it
+    [InlineData(VirtualKey.Number0)]  // was clear-stars - nothing replaced it
     public void RemovedBindingsDoNothingAtAll(VirtualKey key)
     {
         // Not "resolves to something else" - resolves to None. A removed key that quietly kept
@@ -199,25 +196,74 @@ public class InputRouterTests
     }
 
     [Fact]
-    public void NoDirectFlagSetKeyRemains()
+    public void ExactlyOneKeyReachesEachDirectSetCommand()
     {
-        // PRD 2.1.1's consequence, pinned: the ladder is reachable only by stepping. If a
-        // direct-set key is reintroduced later this test is the one that should be updated
-        // deliberately, rather than the behaviour changing unnoticed.
-        var everyKey = System.Enum.GetValues<VirtualKey>();
+        // PRD 2.1.1: the direct-set flags are back, on Z/X/C. Sweeping every VirtualKey rather
+        // than asserting the three individually is what catches the real risk - a SECOND key
+        // quietly resolving to the same command, which is how the old P/C pair drifted apart.
+        var byCommand = new Dictionary<AppCommand, List<VirtualKey>>
+        {
+            [AppCommand.SetRejected] = [],
+            [AppCommand.SetUnflagged] = [],
+            [AppCommand.SetPicked] = [],
+        };
 
-        foreach (var key in everyKey)
+        foreach (var key in System.Enum.GetValues<VirtualKey>())
         {
             foreach (var extended in new[] { true, false })
             {
                 var command = InputRouter.Resolve(key, extended).Command;
-
-                Assert.NotEqual(AppCommand.SetPicked, command);
-                Assert.NotEqual(AppCommand.SetRejected, command);
-                Assert.NotEqual(AppCommand.SetUnflagged, command);
+                if (byCommand.TryGetValue(command, out var keys) && !keys.Contains(key))
+                    keys.Add(key);
             }
         }
+
+        Assert.Equal([VirtualKey.Z], byCommand[AppCommand.SetRejected]);
+        Assert.Equal([VirtualKey.X], byCommand[AppCommand.SetUnflagged]);
+        Assert.Equal([VirtualKey.C], byCommand[AppCommand.SetPicked]);
     }
+
+    [Theory]
+    [InlineData(VirtualKey.Z, AppCommand.SetRejected)]
+    [InlineData(VirtualKey.X, AppCommand.SetUnflagged)]
+    [InlineData(VirtualKey.C, AppCommand.SetPicked)]
+    public void TheBottomRowJumpsStraightToAFlag(VirtualKey key, AppCommand expected)
+        => AssertResolvesEitherWay(key, expected);
+
+    [Fact]
+    public void JumpingAndSteppingAreDifferentCommands()
+    {
+        // The distinction PRD 2.1.1 rests on: Z/X/C set a rung outright, W/S walk to one. Both
+        // are available; neither is implemented in terms of the other.
+        foreach (var jump in new[] { VirtualKey.Z, VirtualKey.X, VirtualKey.C })
+        {
+            var command = InputRouter.Resolve(jump, isExtendedKey: false).Command;
+            Assert.NotEqual(AppCommand.LadderUp, command);
+            Assert.NotEqual(AppCommand.LadderDown, command);
+        }
+    }
+
+    // ---- Zoom: Space toggles, Escape only exits ----
+
+    [Fact]
+    public void EscapeExitsZoom()
+        => AssertResolvesEitherWay(VirtualKey.Escape, AppCommand.ExitZoom);
+
+    [Fact]
+    public void EscapeCanNeverBeTheKeyThatEntersZoom()
+    {
+        // The whole reason both keys exist. Space is a toggle and so can enter; Escape resolves
+        // to ExitZoom unconditionally, which is a no-op when not zoomed. If Escape ever resolved
+        // to ToggleZoom it would start pulling the user INTO zoom when they meant to back out.
+        Assert.NotEqual(AppCommand.ToggleZoom, InputRouter.Resolve(VirtualKey.Escape, true).Command);
+        Assert.NotEqual(AppCommand.ToggleZoom, InputRouter.Resolve(VirtualKey.Escape, false).Command);
+    }
+
+    [Fact]
+    public void SpaceAndEscapeAreNotTheSameCommand()
+        => Assert.NotEqual(
+            InputRouter.Resolve(VirtualKey.Space, false).Command,
+            InputRouter.Resolve(VirtualKey.Escape, false).Command);
 
     [Fact]
     public void NoKeyClearsStars()
