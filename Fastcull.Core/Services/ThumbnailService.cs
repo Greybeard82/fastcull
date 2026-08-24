@@ -80,8 +80,15 @@ namespace Fastcull.Services
         /// preview lifted out of a RAW container. Returns null on any decode failure; propagates
         /// cancellation. The same never-race-a-WinRT-call rule as above applies.
         /// </summary>
+        /// <param name="explicitOrientation">
+        /// An EXIF orientation (1-8) to apply in place of whatever the stream itself carries.
+        /// Only the RAW path passes this: its bytes are a JPEG sliced out of a container, and the
+        /// orientation tag stayed behind in the container. When supplied, the stream's own EXIF is
+        /// deliberately ignored rather than combined, so the rotation can never be applied twice.
+        /// </param>
         public static async Task<SoftwareBitmap?> DecodeScaledFromStreamAsync(
-            IRandomAccessStream stream, uint longEdge, CancellationToken cancellationToken)
+            IRandomAccessStream stream, uint longEdge, CancellationToken cancellationToken,
+            int explicitOrientation = ExifOrientation.Normal)
         {
             try
             {
@@ -96,12 +103,19 @@ namespace Fastcull.Services
                 // half-gigabyte buffer here.
                 longEdge = DimensionGuard.ClampLongEdge(longEdge, decoder.PixelWidth, decoder.PixelHeight);
 
+                // Scale is computed from the stored dimensions, before any quarter turn. That is
+                // correct either way: a rotation swaps width and height but not their maximum,
+                // which is what the long edge is measured against.
                 var scale = Math.Min(1.0, longEdge / (double)Math.Max(decoder.PixelWidth, decoder.PixelHeight));
+                var (flip, rotation) = ExifOrientation.ToTransform(explicitOrientation);
+
                 var transform = new BitmapTransform
                 {
                     ScaledWidth = (uint)Math.Max(1, Math.Round(decoder.PixelWidth * scale)),
                     ScaledHeight = (uint)Math.Max(1, Math.Round(decoder.PixelHeight * scale)),
                     InterpolationMode = BitmapInterpolationMode.Fant,
+                    Flip = flip,
+                    Rotation = rotation,
                 };
 
                 // Always awaited to completion, whatever cancellationToken does meanwhile - the
@@ -110,7 +124,12 @@ namespace Fastcull.Services
                     BitmapPixelFormat.Bgra8,
                     BitmapAlphaMode.Premultiplied,
                     transform,
-                    ExifOrientationMode.RespectExifOrientation,
+                    // Respect the stream's own EXIF only when the caller has not supplied one.
+                    // Doing both would rotate a portrait RAW twice on any container whose embedded
+                    // preview happens to carry its own tag.
+                    ExifOrientation.IsRotated(explicitOrientation)
+                        ? ExifOrientationMode.IgnoreExifOrientation
+                        : ExifOrientationMode.RespectExifOrientation,
                     ColorManagementMode.DoNotColorManage).AsTask().ConfigureAwait(false);
 
                 if (cancellationToken.IsCancellationRequested)

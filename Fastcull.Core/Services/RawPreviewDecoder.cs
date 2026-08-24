@@ -68,6 +68,11 @@ namespace Fastcull.Services
                 var candidates = FindEmbeddedJpegs(buffer, length);
                 if (candidates.Count == 0) return null;
 
+                // Read from the container, not from the candidate: slicing an embedded JPEG out of
+                // a RAW leaves the container's TIFF IFD0 - and its orientation tag - behind, which
+                // is exactly why every portrait RAW used to render on its side.
+                var orientation = ExifOrientation.Read(filePath);
+
                 // Smallest candidate that still covers the tier: decoding a 160x120 thumbnail
                 // for the thumbnail tier is far cheaper than decoding the full-size preview and
                 // throwing the pixels away. Sorting ascending also means the huge lossless-JPEG
@@ -81,7 +86,7 @@ namespace Fastcull.Services
                 {
                     cancellationToken.ThrowIfCancellationRequested();
 
-                    var bitmap = await TryDecodeCandidateAsync(buffer, candidate, longEdge, cancellationToken).ConfigureAwait(false);
+                    var bitmap = await TryDecodeCandidateAsync(buffer, candidate, longEdge, orientation, cancellationToken).ConfigureAwait(false);
                     if (bitmap is null) continue;
 
                     best?.Dispose();
@@ -153,7 +158,7 @@ namespace Fastcull.Services
         }
 
         private static async Task<SoftwareBitmap?> TryDecodeCandidateAsync(
-            byte[] buffer, JpegCandidate candidate, uint longEdge, CancellationToken cancellationToken)
+            byte[] buffer, JpegCandidate candidate, uint longEdge, int orientation, CancellationToken cancellationToken)
         {
             try
             {
@@ -164,7 +169,8 @@ namespace Fastcull.Services
                 await stream.WriteAsync(bytes.AsBuffer()).AsTask().ConfigureAwait(false);
                 stream.Seek(0);
 
-                return await ThumbnailService.DecodeScaledFromStreamAsync(stream, longEdge, cancellationToken).ConfigureAwait(false);
+                return await ThumbnailService.DecodeScaledFromStreamAsync(
+                    stream, longEdge, cancellationToken, orientation).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

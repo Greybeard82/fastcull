@@ -6,13 +6,16 @@ namespace Fastcull.Models
     /// A user-applied rotation, as a count of 90-degree clockwise quarter turns.
     ///
     /// **This is a delta, not an absolute orientation.** It means "turn whatever the decoder
-    /// handed me by this much", never "the final image faces this way". That distinction is
-    /// deliberate and load-bearing: this codebase does not yet apply EXIF orientation at decode
-    /// time, and when it eventually does, the decoded baseline will change for every photo the
-    /// camera tagged as rotated. Because stored values are deltas on top of that baseline, a
-    /// user's rotation stays semantically correct - "two more quarter turns than however this
-    /// file naturally sits" is true before and after. Storing an absolute orientation instead
-    /// would silently re-interpret every stored value the day EXIF handling lands.
+    /// handed me by this much", never "the final image faces this way".
+    ///
+    /// That distinction was deliberate and it paid for itself on 2026-08-24, when RAW files
+    /// started having their EXIF orientation applied at decode time (see
+    /// <see cref="Services.ExifOrientation"/>). Every portrait RAW's decoded baseline turned a
+    /// quarter turn that day. Because stored values are deltas on top of that baseline, existing
+    /// user rotations stayed semantically correct across the change - "two more quarter turns
+    /// than however this file naturally sits" is true before and after - and no migration was
+    /// needed. Storing an absolute orientation would have silently re-interpreted every value
+    /// already in the database.
     ///
     /// Rotation is a display transform only. It never triggers a re-decode: PRD 3.5 budgets the
     /// decode pipeline, and spending a decode on a transform would waste it and invalidate cache
