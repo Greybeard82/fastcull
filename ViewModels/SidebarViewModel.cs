@@ -176,6 +176,24 @@ namespace Fastcull.ViewModels
         }
 
         // ------------------------------------------------------------------
+        // Active Photo panel (PRD 1.5)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// The photo the cursor is on. The panel binds straight through to it rather than copying
+        /// its fields, so the sidebar and the on-photo overlay (PRD 1.8.1) are literally reading
+        /// the same properties and cannot drift apart - including a place name that arrives after
+        /// the photo did.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(ActivePhotoVisibility))]
+        private FilmstripItemViewModel? _activePhoto;
+
+        public Visibility ActivePhotoVisibility => ActivePhoto is null ? Visibility.Collapsed : Visibility.Visible;
+
+        public void SetActivePhoto(FilmstripItemViewModel? item) => ActivePhoto = item;
+
+        // ------------------------------------------------------------------
         // Scan progress (PRD 1.2)
         // ------------------------------------------------------------------
 

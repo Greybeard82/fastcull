@@ -82,6 +82,73 @@ namespace Fastcull.ViewModels
             }
         }
 
+        /// <summary>
+        /// Captured at construction, which happens on the UI thread. Needed because the only
+        /// asynchronous thing this class owns - the geocoding callback below - completes on a
+        /// thread-pool thread and must marshal back before touching a bound property.
+        /// </summary>
+        private readonly Microsoft.UI.Dispatching.DispatcherQueue _dispatcherQueue =
+            Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+
+        private bool _isInfoVisible;
+
+        /// <summary>
+        /// PRD 1.8.1's on-photo info overlay. Mirrored onto the items for the same reason
+        /// <see cref="IsZoomed"/> is: the stage is a templated repeater bound to the item type, so
+        /// the template can only see per-item properties.
+        ///
+        /// Session-only. It is a glance, not a preference, and nothing persists it.
+        /// </summary>
+        public bool IsInfoVisible
+        {
+            get => _isInfoVisible;
+            set
+            {
+                if (_isInfoVisible == value) return;
+                _isInfoVisible = value;
+
+                foreach (var item in Items) item.IsInfoVisible = value;
+
+                OnPropertyChanged(nameof(IsInfoVisible));
+            }
+        }
+
+        /// <summary>
+        /// PRD 1.8.2's reverse geocoding. Constructed once and shared, so its cache spans the
+        /// session rather than the photo.
+        /// </summary>
+        private readonly PlaceLookup _places = new(new NominatimPlaceResolver());
+
+        /// <summary>
+        /// Fills in the active photo's place, without ever making anything wait for it.
+        ///
+        /// Three outcomes, in order of cost: no GPS at all and the field stays empty; a cached
+        /// name and it appears instantly; otherwise the raw coordinates show immediately (via
+        /// PlaceText's own fallback) and a background lookup may replace them later. Nothing here
+        /// awaits, and nothing downstream of navigation depends on it.
+        /// </summary>
+        private void ResolvePlace(FilmstripItemViewModel item)
+        {
+            if (item.Photo.Latitude is not double lat || item.Photo.Longitude is not double lon) return;
+            if (!string.IsNullOrWhiteSpace(item.PlaceName)) return;
+
+            if (_places.TryGetCached(lat, lon, out var cached))
+            {
+                // A cached null is a remembered failure: the coordinates already on screen are the
+                // correct final answer, so there is nothing to do.
+                if (cached is not null) item.PlaceName = cached;
+                return;
+            }
+
+            _places.BeginResolve(lat, lon, name =>
+                _dispatcherQueue.TryEnqueue(() =>
+                {
+                    // The cursor may have moved on, and the item may even have been evicted. Both
+                    // are fine: the name is cached either way, so arriving late costs nothing.
+                    try { item.PlaceName = name; } catch { }
+                }));
+        }
+
         private SessionStore? _sessionStore;
 
         /// <summary>
@@ -218,6 +285,11 @@ namespace Fastcull.ViewModels
             // so this highlight is the whole of how it answers where in the shoot you are.
             Sidebar.SetCurrentFolder(Path.GetDirectoryName(Items[index].Photo.RelativePath) ?? string.Empty);
 
+            // The sidebar's Active Photo panel (PRD 1.5) reads the item directly, so it follows
+            // the cursor for free - including any place name that lands later.
+            Sidebar.SetActivePhoto(Items[index]);
+            ResolvePlace(Items[index]);
+
             RecomputeSlots();
         }
 
@@ -329,6 +401,8 @@ namespace Fastcull.ViewModels
 
                 case AppCommand.ToggleZoom: IsZoomed = !IsZoomed; break;
                 case AppCommand.ExitZoom: IsZoomed = false; break;
+
+                case AppCommand.ToggleInfo: IsInfoVisible = !IsInfoVisible; break;
             }
         }
 

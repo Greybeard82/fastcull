@@ -188,6 +188,99 @@ namespace Fastcull.ViewModels
         public ScannedPhoto Photo { get; }
         public int Index { get; }
 
+        // ------------------------------------------------------------------
+        // PRD 1.5 Active Photo / 1.8.1 info overlay
+        //
+        // One set of fields, two surfaces: the sidebar panel and the on-photo overlay read exactly
+        // the same properties, so they can never disagree about the photo they both describe.
+        // Every field follows PRD 1.5's rule - absent means the row is omitted, never blank.
+        // ------------------------------------------------------------------
+
+        /// <summary>Mirrored from MainViewModel, per-item because the stage is a templated repeater.</summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(InfoOverlayVisibility))]
+        private bool _isInfoVisible;
+
+        /// <summary>Only the active photo carries the overlay - it describes one photo, not all nine.</summary>
+        public Visibility InfoOverlayVisibility =>
+            IsInfoVisible && IsActive ? Visibility.Visible : Visibility.Collapsed;
+
+        public string DeviceText => Photo.CameraModel ?? string.Empty;
+        public Visibility DeviceVisibility => Field(Photo.CameraModel);
+
+        public string ResolutionText
+        {
+            get
+            {
+                if (Photo.PixelWidth is not int w || Photo.PixelHeight is not int h || w <= 0 || h <= 0)
+                    return string.Empty;
+
+                var megapixels = w * (double)h / 1_000_000;
+                return $"{w:N0} × {h:N0}  ·  {megapixels:0.#} MP";
+            }
+        }
+
+        public Visibility ResolutionVisibility => Field(ResolutionText);
+
+        /// <summary>
+        /// The capture date resolved by PRD 1.3. Marked when it came from the file's modified time
+        /// rather than from EXIF, because an exported PNG's timestamp is not a capture date and
+        /// presenting it as one would be a quiet lie.
+        /// </summary>
+        public string CapturedText => Photo.SortTimeSource == TimeSource.FileModified
+            ? $"{Photo.SortTime:d MMM yyyy, HH:mm} (file date)"
+            : $"{Photo.SortTime:d MMM yyyy, HH:mm}";
+
+        public Visibility CapturedVisibility => Visibility.Visible;   // always resolvable, per PRD 1.3
+
+        /// <summary>
+        /// The place name once geocoding resolves it, or raw coordinates until then, or nothing at
+        /// all when the file carries no GPS - which is the common case (PRD 1.8.2).
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(PlaceText))]
+        [NotifyPropertyChangedFor(nameof(PlaceVisibility))]
+        private string? _placeName;
+
+        public string PlaceText
+        {
+            get
+            {
+                if (!string.IsNullOrWhiteSpace(PlaceName)) return PlaceName!;
+
+                return Photo.Latitude is double lat && Photo.Longitude is double lon
+                    ? GeoFormat.Coordinates(lat, lon)
+                    : string.Empty;
+            }
+        }
+
+        public Visibility PlaceVisibility => Field(PlaceText);
+
+        /// <summary>
+        /// Where the photo lives: the path relative to the scan root when it sits in a subfolder,
+        /// and the scan root's own folder name when it does not.
+        ///
+        /// The relative path is empty for a photo in the root, and rendering that as "." tells the
+        /// user nothing - so the root falls back to the real containing folder's name, which is
+        /// what they would call it.
+        /// </summary>
+        public string FolderText
+        {
+            get
+            {
+                var relativeDirectory = Path.GetDirectoryName(Photo.RelativePath);
+                if (!string.IsNullOrEmpty(relativeDirectory)) return relativeDirectory;
+
+                var containing = Path.GetFileName(Path.GetDirectoryName(Photo.FilePath));
+                return string.IsNullOrEmpty(containing) ? "." : containing;
+            }
+        }
+
+        public Visibility FolderVisibility => Visibility.Visible;
+
+        private static Visibility Field(string? value)
+            => string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
+
         public string FileName => Photo.FileName;
         public string FormatLabel => Path.GetExtension(Photo.FileName).TrimStart('.').ToUpperInvariant();
 
@@ -245,6 +338,7 @@ namespace Fastcull.ViewModels
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(StageChromeVisibility))]
         [NotifyPropertyChangedFor(nameof(DimensionLimitedVisibility))]
+        [NotifyPropertyChangedFor(nameof(ZoomLoadingVisibility))]
         private bool _isZoomed;
 
         /// <summary>
@@ -347,6 +441,7 @@ namespace Fastcull.ViewModels
         [NotifyPropertyChangedFor(nameof(ThumbnailImageHeight))]
         [NotifyPropertyChangedFor(nameof(ThumbnailImageLeft))]
         [NotifyPropertyChangedFor(nameof(ThumbnailImageTop))]
+        [NotifyPropertyChangedFor(nameof(InfoOverlayVisibility))]
         private bool _isActive;
 
         /// <summary>Position on the PRD 1.6 cull ladder. Set only via MainViewModel.</summary>
@@ -435,6 +530,22 @@ namespace Fastcull.ViewModels
             DimensionLimited && IsZoomed ? Visibility.Visible : Visibility.Collapsed;
 
         /// <summary>
+        /// True while a zoom-tier decode is in flight for this photo (PRD 1.7's loading indicator).
+        ///
+        /// The window it marks is real: entering zoom shows the display-tier image immediately and
+        /// swaps the larger decode in when it lands, so for a moment the photo on screen is not the
+        /// one that was asked for. Without the indicator a soft frame is indistinguishable from a
+        /// finished one that is simply soft - the exact confusion that hid a silently failing zoom
+        /// decode for three rounds of investigation.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(ZoomLoadingVisibility))]
+        private bool _isZoomLoading;
+
+        public Visibility ZoomLoadingVisibility =>
+            IsZoomLoading && IsZoomed ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>
         /// Decodes this photo at <paramref name="longEdge"/> for zoom, then swaps it in.
         ///
         /// Follows the rules established after the 0xC000027B stowed-exception crash: the WinRT
@@ -464,6 +575,12 @@ namespace Fastcull.ViewModels
 
             var cts = new CancellationTokenSource();
             _zoomCts = cts;
+
+            // Raised before the decode starts and cleared in the finally below, so EVERY exit -
+            // success, cancellation, failure, or a resize superseding this request - takes the
+            // indicator down. A loading mark that outlived its decode would be a permanent
+            // artefact on a photo that is no longer loading anything.
+            IsZoomLoading = true;
 
             try
             {
@@ -508,6 +625,13 @@ namespace Fastcull.ViewModels
                 System.Diagnostics.Debug.WriteLine($"[FastCull] Zoom decode failed: {ex}");
 
                 if (System.Diagnostics.Debugger.IsAttached) System.Diagnostics.Debugger.Break();
+            }
+            finally
+            {
+                // Only the request that is still current clears the flag. A superseded decode
+                // (the stage resized and re-requested) must not switch the indicator off while
+                // its replacement is still running.
+                if (ReferenceEquals(_zoomCts, cts)) IsZoomLoading = false;
             }
         }
 
@@ -559,6 +683,13 @@ namespace Fastcull.ViewModels
             _zoomCts?.Cancel();
             _zoomCts?.Dispose();
             _zoomCts = null;
+
+            // Cleared here as well as in LoadZoomImageAsync's finally, and this is the path that
+            // matters: nulling _zoomCts above means the cancelled decode's own finally can no
+            // longer recognise itself as current, so without this the indicator would survive its
+            // decode - stuck on a photo that has stopped loading. A re-request raises it again
+            // immediately afterwards, so a supersede does not flicker.
+            IsZoomLoading = false;
         }
 
         /// <summary>

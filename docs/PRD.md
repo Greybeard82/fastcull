@@ -112,6 +112,18 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
     - **Selecting a folder moves the cursor to the first photo in its subtree. It does not filter the sequence.** Filtering would change what the cull sequence *is*, and `ActiveIndex`, the §3.3 prefetch window and the tallies all index into it. Navigation gives most of the value at none of that cost.
     - Because it does not filter, the folder containing the active photo is **highlighted in the accent tone and follows the cursor** — that "you are here" mark is what makes a read-only tree worth having.
     - **The whole section hides when the scanned folder has no subfolders.** A tree of one node says nothing the folder name above it does not.
+  - **Active Photo panel.** Five fields describing whichever photo is currently active, updating live as the cursor moves:
+
+    | Field | Source |
+    | :--- | :--- |
+    | **Device** | EXIF camera make + model |
+    | **Resolution** | pixel dimensions, plus megapixels |
+    | **Captured** | the resolved capture date (§1.3), which already carries its source tier |
+    | **Place** | reverse-geocoded place name from EXIF GPS — see §1.8's geocoding note |
+    | **Folder** | the containing folder, relative to the scan root |
+
+    **Absent fields are omitted, never shown blank or as a placeholder.** This is the same rule §1.8 already sets for the HUD, and it applies here for the same reason: a PNG has no camera model and most files have no GPS at all. A panel that renders `Device: —` for half a folder is worse than one that renders four fields instead of five.
+
   - **Scan progress pill** — see §1.2.
   - **Finish Session is a disabled placeholder** carrying a "coming soon" tooltip. §4.1's modal and the entire batch copy/move path do not exist; a button that looked live would be a lie. The tooltip sits on a wrapping element because a disabled WinUI control receives no pointer input and would never show one.
   - **Not built from this line's original list:** nothing. Every item is present, though "file counts" is realised as the tally block plus the format breakdown rather than a single number.
@@ -207,6 +219,9 @@ A working zoom exists and is in daily use. **It is not the Tier A / Tier B desig
 - **The bottom filmstrip hides while zoomed**, so the photo owns the whole window.
 - **On-photo rating indicators stay visible**, so the ladder can be driven without leaving zoom.
 - The 512 MB dimension guard (§3.3) applies here, and a capped photo raises an on-photo `1:1 UNAVAILABLE` badge rather than looking mysteriously soft.
+- **Loading indicator, lower-right corner.** Entering zoom shows the display-tier image immediately and swaps the larger zoom-tier decode in when it lands, so there is a window — short on JPEG, longer on RAW — where the photo on screen is not yet the one that was asked for. The indicator marks that window: visible while the zoom-tier decode is in flight, gone the instant it swaps in. Without it a soft frame is indistinguishable from a finished one that is simply soft, which is exactly the confusion that cost three rounds of investigation when the zoom decode was silently failing.
+  - Lower-right, sharing that corner with the star badge and sitting opposite the §1.8 info overlay.
+  - It must clear on **every** exit from the pending state, not just the success path: a cancelled decode (navigating away, exiting zoom, a resize superseding the request) and a failed one both have to take it down, or it becomes a permanent artefact on a photo that is no longer loading anything.
 
 **What it is not — explicitly not implemented:**
 
@@ -221,9 +236,33 @@ A working zoom exists and is in daily use. **It is not the Tier A / Tier B desig
 Because the zoom is fit-to-stage rather than 1:1, it answers "is this frame sharp enough and well composed" but **not** "is critical focus on the eye". The latter needs panning at true 1:1, and that remains the v0.2 work this section describes.
 
 ### 1.8 Metadata HUD
-- Toggled by `I`. Renders as a transparent overlay: `Filename`, `Format`, `Model`, `Lens`, `ISO`, `Shutter`, `Aperture`, `Focal Length`, `Timestamp` (with its source tier from 1.3), `Dimensions`, `File Size`, and the current display tier so you always know whether you are looking at real pixels.
+
+**Full design (not yet built).** Toggled by `I`. Renders as a transparent overlay: `Filename`, `Format`, `Model`, `Lens`, `ISO`, `Shutter`, `Aperture`, `Focal Length`, `Timestamp` (with its source tier from 1.3), `Dimensions`, `File Size`, and the current display tier so you always know whether you are looking at real pixels.
+
 - Fields absent from the file's metadata are omitted rather than shown blank. A PNG has no aperture; the HUD should not pretend otherwise.
 - Metadata is read once during the scan and cached in the session database as JSON. The HUD never touches disk.
+
+#### 1.8.1 Info overlay — the built subset
+
+`I` toggles an on-photo overlay carrying **the same five fields as the sidebar's Active Photo panel** (§1.5): device, resolution, capture date, place, folder. It is a strict subset of the full HUD above, sharing the same source data, so building the rest later is adding fields rather than rebuilding the surface.
+
+- **Lower-left corner of the active photo.** Deliberately not lower-right: that corner is taken by the star-rating badge and by the zoom loading indicator (§1.7), and stacking three things there would collide at the exact moment all three are most likely to be on screen at once.
+- **Works in both normal stage view and while zoomed.** The same overlay, positioned against whatever the photo's rendered box currently is.
+- **Toggle state does not persist across restart.** It is a glance, not a preference.
+- Absent fields are omitted, per the rule above.
+
+#### 1.8.2 Reverse geocoding — the first network-dependent feature in the app
+
+Resolving a place name from GPS coordinates is the **first and currently only** thing FastCull does that touches the network. That deserves explicit constraints, because the prime directive (§0) does not stop applying just because a feature is convenient:
+
+- **Opportunistic and best-effort. Never blocking.** A lookup must never delay navigation, decode, or the photo appearing. Nothing in the render path waits on it. The field simply fills in later if it fills in at all.
+- **Fails silently to raw coordinates.** No network, DNS failure, timeout, rate limit, malformed response — every failure path falls back to displaying the raw `lat, long`, which is still genuinely useful information. No error dialog, no retry storm, no red text.
+- **Times out quickly.** A slow lookup is a failed lookup.
+- **Cached by rounded coordinate, not exact float.** A burst of forty frames from one spot must produce one lookup, not forty. Rounding is the cache key.
+- **Offline is a supported state, not a degraded one.** The app must be fully usable with no network at all; the only difference is that Place reads as coordinates instead of a name.
+- **No GPS is the common case.** Most files carry no GPS at all. Those omit the field entirely, per §1.5.
+
+If reverse geocoding ever needs to become more than this — batch prefetching, a paid provider, a persistent on-disk cache — that is a decision to take explicitly, not to drift into.
 
 ### 1.9 Undo
 - `Ctrl+Z` / `Ctrl+Y` over a command stack of at least 200 entries.
@@ -276,7 +315,7 @@ A per-photo **quarter-turn count** — 0, 1, 2 or 3 turns clockwise — applied 
 | `Home` / `End` | First / last photo |
 | `Space` | Toggle zoom mode (§1.7) |
 | `Esc` | Exit zoom mode |
-| ~~`I`~~ | ~~Toggle metadata HUD~~ — **not implemented**, §1.8 is unbuilt |
+| `I` | Toggle the on-photo info overlay (§1.8.1) — device, resolution, capture date, place, folder. The full §1.8 HUD remains unbuilt |
 | ~~`Delete`~~ | ~~Move file group to Recycle Bin~~ — **not implemented** |
 | ~~`Ctrl+Z` / `Ctrl+Y`~~ | ~~Undo / redo~~ — **not implemented**, §1.9 is unbuilt |
 
@@ -312,8 +351,9 @@ Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of e
 | `Left` / `Right` | Previous / next photo, exactly as in filmstrip mode. The zoom stays on and re-decodes for the new photo |
 | `Up` / `Down`, `1`-`5`, `0`, `Z`/`X`, `C`/`P`, `U` | Rating keys stay live, as designed |
 | `A` / `S` | Rotation, as in filmstrip mode — **not** previous/next. The designed `A`/`D` navigation binding was never implemented |
+| `I` | Toggle the info overlay (§1.8.1) — the same overlay as in filmstrip mode, positioned against the zoomed photo's box |
 | `Space` or `Esc` | Exit to filmstrip |
-| ~~`Arrow keys` pan~~, ~~`PgUp`/`PgDn`~~, ~~`I`~~ | Not implemented |
+| ~~`Arrow keys` pan~~, ~~`PgUp`/`PgDn`~~ | Not implemented |
 
 Input routing is handled in one place at window level, per §2.4 — `MainWindow.RootGrid_PreviewKeyDown`, a tunnelling handler that claims every mapped key before any focused child can consume it. Unmapped keys log at debug level rather than being silently swallowed. What does not yet exist is the *two-state* part: the router is currently mode-agnostic.
 

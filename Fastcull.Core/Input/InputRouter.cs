@@ -20,6 +20,9 @@ namespace Fastcull.Input
         RotateLeft,      // 90 degrees counter-clockwise
         ToggleZoom,
         ExitZoom,
+
+        /// <summary>PRD 1.8.1's on-photo info overlay. Not the full PRD 1.8 HUD, which is unbuilt.</summary>
+        ToggleInfo,
     }
 
     public readonly record struct ResolvedInput(AppCommand Command, int Payload)
@@ -81,6 +84,10 @@ namespace Fastcull.Input
                 // split below cannot shadow them.
                 case VirtualKey.Space: return new ResolvedInput(AppCommand.ToggleZoom, 0);
                 case VirtualKey.Escape: return new ResolvedInput(AppCommand.ExitZoom, 0);
+                // Info overlay (PRD 1.8.1). Resolved here rather than in the extended/numpad split
+                // below for the same reason as the others: it means the same thing either way, and
+                // it works identically in both stage and zoom views.
+                case VirtualKey.I: return new ResolvedInput(AppCommand.ToggleInfo, 0);
             }
 
             return isExtendedKey ? ResolveExtended(key) : ResolveNumpad(key);

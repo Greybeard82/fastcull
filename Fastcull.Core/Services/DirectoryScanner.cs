@@ -46,6 +46,25 @@ namespace Fastcull.Services
         public DateTime SortTime { get; init; }
         public TimeSource SortTimeSource { get; init; }
         public int? CaptureSubsec { get; init; }
+
+        // ---- PRD 1.5 Active Photo / 1.8.1 info overlay ----
+        //
+        // All nullable, and all read from the SAME metadata pass that resolves the sort time -
+        // the directories are already in hand, so these cost a few tag lookups rather than a
+        // second file read. Absent values stay null and the UI omits the field entirely; PRD 1.5
+        // is explicit that a blank or placeholder row is worse than a missing one.
+
+        /// <summary>Camera make and model, already de-duplicated ("Canon EOS 80D", not "Canon Canon EOS 80D").</summary>
+        public string? CameraModel { get; init; }
+
+        public int? PixelWidth { get; init; }
+        public int? PixelHeight { get; init; }
+
+        /// <summary>EXIF GPS. Null on the overwhelming majority of files - none of this repo's 101 samples carry any.</summary>
+        public double? Latitude { get; init; }
+        public double? Longitude { get; init; }
+
+        public bool HasCoordinates => Latitude is not null && Longitude is not null;
     }
 
     /// <summary>
@@ -159,7 +178,14 @@ namespace Fastcull.Services
             cancellationToken.ThrowIfCancellationRequested();
 
             var family = ExtensionToFamily.TryGetValue(Path.GetExtension(filePath), out var f) ? f : FormatFamily.Other;
-            var (sortTime, source, subsecMs) = ResolveSortTime(filePath);
+
+            // One metadata read, shared. ResolveSortTime used to open the file itself; it now
+            // takes the directories so the PRD 1.5 fields below do not cost a second pass.
+            var directories = ReadMetadata(filePath);
+
+            var (sortTime, source, subsecMs) = ResolveSortTime(directories, filePath);
+            var (width, height) = ReadDimensions(directories);
+            var (latitude, longitude) = ReadCoordinates(directories);
             var fileBytes = new FileInfo(filePath).Length;
 
             return new ScannedPhoto
@@ -172,22 +198,103 @@ namespace Fastcull.Services
                 SortTime = sortTime,
                 SortTimeSource = source,
                 CaptureSubsec = subsecMs,
+                CameraModel = ReadCameraModel(directories),
+                PixelWidth = width,
+                PixelHeight = height,
+                Latitude = latitude,
+                Longitude = longitude,
             };
         }
 
-        /// <summary>Applies the sort-key hierarchy from PRD 1.3, first tier available wins.</summary>
-        private static (DateTime SortTime, TimeSource Source, int? CaptureSubsecMs) ResolveSortTime(string filePath)
+        private static IReadOnlyList<MetadataExtractor.Directory> ReadMetadata(string filePath)
         {
-            IReadOnlyList<MetadataExtractor.Directory> directories;
-            try
+            try { return ImageMetadataReader.ReadMetadata(filePath); }
+            catch { return Array.Empty<MetadataExtractor.Directory>(); }
+        }
+
+        /// <summary>
+        /// Make plus model, with the make dropped when the model already repeats it - most Canon
+        /// bodies report Make "Canon" and Model "Canon EOS 80D", and concatenating blindly gives
+        /// "Canon Canon EOS 80D".
+        /// </summary>
+        internal static string? ReadCameraModel(IReadOnlyList<MetadataExtractor.Directory> directories)
+        {
+            string? make = null, model = null;
+
+            foreach (var ifd0 in directories.OfType<ExifIfd0Directory>())
             {
-                directories = ImageMetadataReader.ReadMetadata(filePath);
-            }
-            catch
-            {
-                directories = Array.Empty<MetadataExtractor.Directory>();
+                make ??= Clean(ifd0.GetDescription(ExifDirectoryBase.TagMake));
+                model ??= Clean(ifd0.GetDescription(ExifDirectoryBase.TagModel));
+                if (make is not null && model is not null) break;
             }
 
+            if (model is null) return make;
+            if (make is null) return model;
+
+            return model.StartsWith(make, StringComparison.OrdinalIgnoreCase) ? model : $"{make} {model}";
+
+            static string? Clean(string? raw)
+            {
+                var trimmed = raw?.Trim();
+                return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+            }
+        }
+
+        /// <summary>
+        /// Pixel dimensions. RAW carries them on the EXIF SubIFD; a JPEG export often does not and
+        /// only the JPEG segment header has them, so both are consulted before giving up.
+        /// </summary>
+        internal static (int? Width, int? Height) ReadDimensions(IReadOnlyList<MetadataExtractor.Directory> directories)
+        {
+            foreach (var sub in directories.OfType<ExifSubIfdDirectory>())
+            {
+                if (sub.TryGetInt32(ExifDirectoryBase.TagExifImageWidth, out var w) &&
+                    sub.TryGetInt32(ExifDirectoryBase.TagExifImageHeight, out var h) &&
+                    w > 0 && h > 0)
+                {
+                    return (w, h);
+                }
+            }
+
+            foreach (var jpeg in directories.OfType<MetadataExtractor.Formats.Jpeg.JpegDirectory>())
+            {
+                try
+                {
+                    var w = jpeg.GetImageWidth();
+                    var h = jpeg.GetImageHeight();
+                    if (w > 0 && h > 0) return (w, h);
+                }
+                catch (MetadataException) { /* tag absent - fall through */ }
+            }
+
+            return (null, null);
+        }
+
+        /// <summary>
+        /// EXIF GPS, already converted out of the degrees/minutes/seconds rationals and signed by
+        /// hemisphere. MetadataExtractor returns null when the tags are absent or unusable, which
+        /// is the common case - see the note on <see cref="ScannedPhoto.Latitude"/>.
+        /// </summary>
+        internal static (double? Latitude, double? Longitude) ReadCoordinates(IReadOnlyList<MetadataExtractor.Directory> directories)
+        {
+            foreach (var gps in directories.OfType<GpsDirectory>())
+            {
+                var location = gps.GetGeoLocation();
+                if (location is null) continue;
+
+                // A zero island fix is the classic "GPS present but never locked" artefact.
+                if (location.Value.IsZero) continue;
+
+                return (location.Value.Latitude, location.Value.Longitude);
+            }
+
+            return (null, null);
+        }
+
+        /// <summary>Applies the sort-key hierarchy from PRD 1.3, first tier available wins.</summary>
+        private static (DateTime SortTime, TimeSource Source, int? CaptureSubsecMs) ResolveSortTime(
+            IReadOnlyList<MetadataExtractor.Directory> directories, string filePath)
+        {
             // RAW containers commonly carry more than one ExifSubIfdDirectory (e.g. one
             // describing the raw sensor data, one with the actual capture metadata) - the tag
             // we want may not be on the first one, so every IFD is checked before falling back.

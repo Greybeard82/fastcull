@@ -37,6 +37,22 @@
             <Setter Property="HorizontalTextAlignment" Value="Right"/>
         </Style>
 
+        <!-- Active Photo rows: a muted label above a readable value, stacked rather than in
+             columns because a place name or a folder path needs the panel's full width. -->
+        <Style x:Key="InfoLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="8"/>
+            <Setter Property="CharacterSpacing" Value="140"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral800Brush}"/>
+        </Style>
+
+        <Style x:Key="InfoValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral300Brush}"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="MaxLines" Value="1"/>
+            <Setter Property="Margin" Value="0,1,0,0"/>
+        </Style>
+
         <Style x:Key="StarValue" TargetType="TextBlock">
             <Setter Property="FontSize" Value="10"/>
             <Setter Property="Foreground" Value="{StaticResource Neutral500Brush}"/>
@@ -49,7 +65,7 @@
     <Grid Background="#FF000000">
         <!-- Hairline on the trailing edge, the only thing dividing panel from stage. -->
         <Border BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="0,0,1,0">
-            <Grid Margin="16,14,16,16" RowDefinitions="Auto,Auto,Auto,Auto,*,Auto">
+            <Grid Margin="16,14,16,16" RowDefinitions="Auto,Auto,Auto,Auto,Auto,*,Auto">
 
                 <!-- ================= Folder + pin ================= -->
                 <Grid Grid.Row="0" ColumnDefinitions="*,Auto">
@@ -163,8 +179,53 @@
                     </ItemsRepeater>
                 </StackPanel>
 
+                <!-- ================= Active Photo (PRD 1.5) =================
+                     Every row hides itself when its field is absent, per PRD 1.5 - a panel showing
+                     "Device: —" for half a folder is worse than one showing four rows. Bound
+                     straight through to the active item so the on-photo overlay (§1.8.1) and this
+                     panel can never disagree. -->
+                <StackPanel Grid.Row="2" Margin="0,26,0,0"
+                            Visibility="{x:Bind ViewModel.ActivePhotoVisibility, Mode=OneWay}">
+                    <TextBlock Text="ACTIVE PHOTO" Style="{StaticResource SectionLabel}"/>
+
+                    <StackPanel Margin="0,0,0,9"
+                                Visibility="{x:Bind ViewModel.ActivePhoto.DeviceVisibility, Mode=OneWay}">
+                        <TextBlock Text="DEVICE" Style="{StaticResource InfoLabel}"/>
+                        <TextBlock Text="{x:Bind ViewModel.ActivePhoto.DeviceText, Mode=OneWay}"
+                                   Style="{StaticResource InfoValue}"/>
+                    </StackPanel>
+
+                    <StackPanel Margin="0,0,0,9"
+                                Visibility="{x:Bind ViewModel.ActivePhoto.ResolutionVisibility, Mode=OneWay}">
+                        <TextBlock Text="RESOLUTION" Style="{StaticResource InfoLabel}"/>
+                        <TextBlock Text="{x:Bind ViewModel.ActivePhoto.ResolutionText, Mode=OneWay}"
+                                   Style="{StaticResource InfoValue}"/>
+                    </StackPanel>
+
+                    <StackPanel Margin="0,0,0,9"
+                                Visibility="{x:Bind ViewModel.ActivePhoto.CapturedVisibility, Mode=OneWay}">
+                        <TextBlock Text="CAPTURED" Style="{StaticResource InfoLabel}"/>
+                        <TextBlock Text="{x:Bind ViewModel.ActivePhoto.CapturedText, Mode=OneWay}"
+                                   Style="{StaticResource InfoValue}"/>
+                    </StackPanel>
+
+                    <StackPanel Margin="0,0,0,9"
+                                Visibility="{x:Bind ViewModel.ActivePhoto.PlaceVisibility, Mode=OneWay}">
+                        <TextBlock Text="PLACE" Style="{StaticResource InfoLabel}"/>
+                        <TextBlock Text="{x:Bind ViewModel.ActivePhoto.PlaceText, Mode=OneWay}"
+                                   Style="{StaticResource InfoValue}"/>
+                    </StackPanel>
+
+                    <StackPanel Visibility="{x:Bind ViewModel.ActivePhoto.FolderVisibility, Mode=OneWay}">
+                        <TextBlock Text="FOLDER" Style="{StaticResource InfoLabel}"/>
+                        <TextBlock Text="{x:Bind ViewModel.ActivePhoto.FolderText, Mode=OneWay}"
+                                   Style="{StaticResource InfoValue}"
+                                   ToolTipService.ToolTip="{x:Bind ViewModel.ActivePhoto.FolderText, Mode=OneWay}"/>
+                    </StackPanel>
+                </StackPanel>
+
                 <!-- ================= Star histogram ================= -->
-                <StackPanel Grid.Row="2" Margin="0,26,0,0">
+                <StackPanel Grid.Row="3" Margin="0,26,0,0">
                     <TextBlock Text="STARS" Style="{StaticResource SectionLabel}"/>
 
                     <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,0,0,6">
@@ -237,7 +298,7 @@
                      Clicking a folder MOVES THE CURSOR to its first photo; it does not filter the
                      sequence. See the run report for why. The section hides itself entirely when
                      the scanned folder is flat, since a tree of one node is just noise. -->
-                <StackPanel Grid.Row="3" Margin="0,26,0,0"
+                <StackPanel Grid.Row="4" Margin="0,26,0,0"
                             Visibility="{x:Bind ViewModel.FolderTreeVisibility, Mode=OneWay}">
                     <TextBlock Text="FOLDERS" Style="{StaticResource SectionLabel}"/>
 
@@ -296,7 +357,7 @@
                      The tooltip sits on the wrapping Grid, not on the Button: a disabled control
                      receives no pointer input in WinUI, so a tooltip set on the Button itself
                      would never appear. -->
-                <Grid Grid.Row="5" ToolTipService.ToolTip="Coming soon — batch export is not built yet">
+                <Grid Grid.Row="6" ToolTipService.ToolTip="Coming soon — batch export is not built yet">
                     <Button IsEnabled="False"
                             HorizontalAlignment="Stretch" Height="30"
                             Background="Transparent"

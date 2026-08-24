@@ -144,6 +144,57 @@
                                                    FontSize="10" CharacterSpacing="120"
                                                    Foreground="{StaticResource Neutral300Brush}"/>
                                     </Border>
+
+                                    <!-- PRD 1.7: zoom-tier decode still in flight. Lower-RIGHT,
+                                         sitting 32px above the star badge rather than beside it -
+                                         they share this corner and both are most likely to be on
+                                         screen at the same moment. -->
+                                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                            Margin="0,0,10,46" CornerRadius="9" Padding="8,3"
+                                            Background="#B0000000"
+                                            Visibility="{x:Bind ZoomLoadingVisibility, Mode=OneWay}">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <ProgressRing IsActive="{x:Bind IsZoomLoading, Mode=OneWay}"
+                                                          Width="10" Height="10"
+                                                          Foreground="{StaticResource Accent300Brush}"/>
+                                            <TextBlock Text="LOADING 1:1"
+                                                       FontSize="9" CharacterSpacing="120"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource Neutral300Brush}"/>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- PRD 1.8.1: the info overlay. Lower-LEFT on purpose - the
+                                         opposite corner from the star badge and the loading
+                                         indicator above, which is the whole reason this side was
+                                         chosen. Each row hides itself when its field is absent. -->
+                                    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                            Margin="10,0,0,14" CornerRadius="4" Padding="10,7"
+                                            Background="#C0000000"
+                                            Visibility="{x:Bind InfoOverlayVisibility, Mode=OneWay}">
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Text="{x:Bind DeviceText, Mode=OneWay}"
+                                                       Visibility="{x:Bind DeviceVisibility, Mode=OneWay}"
+                                                       FontSize="11"
+                                                       Foreground="{StaticResource Neutral200Brush}"/>
+                                            <TextBlock Text="{x:Bind ResolutionText, Mode=OneWay}"
+                                                       Visibility="{x:Bind ResolutionVisibility, Mode=OneWay}"
+                                                       FontSize="10"
+                                                       Foreground="{StaticResource Neutral400Brush}"/>
+                                            <TextBlock Text="{x:Bind CapturedText, Mode=OneWay}"
+                                                       Visibility="{x:Bind CapturedVisibility, Mode=OneWay}"
+                                                       FontSize="10"
+                                                       Foreground="{StaticResource Neutral400Brush}"/>
+                                            <TextBlock Text="{x:Bind PlaceText, Mode=OneWay}"
+                                                       Visibility="{x:Bind PlaceVisibility, Mode=OneWay}"
+                                                       FontSize="10"
+                                                       Foreground="{StaticResource Accent300Brush}"/>
+                                            <TextBlock Text="{x:Bind FolderText, Mode=OneWay}"
+                                                       Visibility="{x:Bind FolderVisibility, Mode=OneWay}"
+                                                       FontSize="9" CharacterSpacing="40"
+                                                       Foreground="{StaticResource Neutral700Brush}"/>
+                                        </StackPanel>
+                                    </Border>
                                 </Grid>
 
                                 <!-- The Chromeless weight bar that used to sit here, below the
