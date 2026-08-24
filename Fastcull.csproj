@@ -64,11 +64,46 @@
     <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
   </PropertyGroup>
 
-  <!-- Publish Properties -->
+  <!--
+    Publish Properties
+
+    ============================================================================================
+    DO NOT set PublishTrimmed back to True. A trimmed build of this app does not launch.
+    ============================================================================================
+
+    These two arrived from the WinUI project template, which enables both for any non-Debug
+    configuration. That default is wrong for this app, and the failure it produces is a silent
+    one: `dotnet publish` succeeds, the output folder looks complete, and the exe dies before it
+    can draw a window.
+
+    Verified 2026-08-24 with a clean Release publish (obj/ and bin/ deleted first, so this is
+    trimming itself and not stale build artifacts):
+
+        Fastcull.exe exits 0xC000027B  (STATUS_STOWED_EXCEPTION)
+        faulting module Microsoft.UI.Xaml.dll, stowed HRESULT 0x80004003 (E_POINTER)
+
+    The cause is that the trimmer removes types and members nothing references statically, while
+    XAML resolves a great deal by name at runtime - converters, x:Bind generated code, and the
+    CsWinRT marshalling shims. The build already tells us this is coming: the trimmer emits
+    IL2104 for WinRT.Runtime, and the MVVM toolkit emits MVVMTK0045 for every [ObservableProperty]
+    field, warning that the generated code is not AOT/trim safe in WinRT scenarios.
+
+    PublishReadyToRun is off alongside it. R2R was never separately shown to break this app - it
+    is pre-compilation rather than removal - but the only publish configuration that has actually
+    been launched and exercised is the one with both disabled, so that is the one committed here.
+    If you want the faster cold start back, validate it on its own and say so here.
+
+    The practical consequence, and the reason this is pinned here rather than passed on the
+    command line: the portable build in publish/FastCull-x64 is produced by a plain
+    `dotnet publish -c Release -r win-x64 (self-contained) -p:Platform=x64
+    -p:WindowsAppSDKSelfContained=true`. It has to be correct with no property overrides, because
+    a broken portable build has already been shipped to that folder once by relying on someone
+    remembering to pass them.
+
+    Debug is unaffected either way - it never had these on.
+  -->
   <PropertyGroup>
-    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
-    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
-    <PublishTrimmed Condition="'$(Configuration)' == 'Debug'">False</PublishTrimmed>
-    <PublishTrimmed Condition="'$(Configuration)' != 'Debug'">True</PublishTrimmed>
+    <PublishReadyToRun>False</PublishReadyToRun>
+    <PublishTrimmed>False</PublishTrimmed>
   </PropertyGroup>
 </Project>
