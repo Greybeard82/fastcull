@@ -278,6 +278,23 @@ namespace Fastcull.ViewModels
 
         public Visibility FolderVisibility => Visibility.Visible;
 
+        // ---- The exposure triplet: a deliberate exception to omit-if-missing ----
+        //
+        // These three ALWAYS render, showing "-" when the file carries no figure, where every
+        // other field above omits its row. PRD 1.8.1 sets out why: for these, absence is itself
+        // information - a frame with no aperture was shot on an adapted or manual lens, which is
+        // a fact about the shot and one that explains a soft result. Omitting would hide it, and
+        // would make the group's height jump as the cursor moves through a mixed folder.
+        //
+        // If a later change makes these omit-if-missing "for consistency", that is a regression.
+
+        /// <summary>Placeholder for the exposure fields only. Everything else omits instead.</summary>
+        private const string MissingExposure = "-";
+
+        public string FocalLengthText => Photo.FocalLength ?? MissingExposure;
+        public string ShutterSpeedText => Photo.ShutterSpeed ?? MissingExposure;
+        public string ApertureText => Photo.Aperture ?? MissingExposure;
+
         private static Visibility Field(string? value)
             => string.IsNullOrWhiteSpace(value) ? Visibility.Collapsed : Visibility.Visible;
 
@@ -339,6 +356,8 @@ namespace Fastcull.ViewModels
         [NotifyPropertyChangedFor(nameof(StageChromeVisibility))]
         [NotifyPropertyChangedFor(nameof(DimensionLimitedVisibility))]
         [NotifyPropertyChangedFor(nameof(ZoomLoadingVisibility))]
+        [NotifyPropertyChangedFor(nameof(StageClip))]
+        [NotifyPropertyChangedFor(nameof(ZoomPercentVisibility))]
         private bool _isZoomed;
 
         /// <summary>
@@ -363,8 +382,13 @@ namespace Fastcull.ViewModels
         // through ApplyStageMetrics; every value below derives from that.
 
         /// <summary>Post-rotation layout box: what participates in layout and what the tick and bar measure against.</summary>
-        [ObservableProperty] private double _stageFrameWidth;
-        [ObservableProperty] private double _stageFrameHeight;
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(StageClip))]
+        private double _stageFrameWidth;
+
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(StageClip))]
+        private double _stageFrameHeight;
 
         /// <summary>Pre-rotation image box - the frame with width and height swapped on a quarter turn.</summary>
         [ObservableProperty] private double _stageImageWidth;
@@ -412,6 +436,16 @@ namespace Fastcull.ViewModels
 
             StageTickWidth = Math.Max(1, frameWidth * TickWidthFraction);
             StageBarWidth = Math.Max(1, frameWidth);
+
+            // Re-clamp the PRD 1.7.1 pan against the frame that now exists.
+            //
+            // The frame's shape changes under this method - a quarter turn (§1.11) swaps the
+            // aspect outright, and the stage resizes on the fullscreen transition - and how far
+            // the image may be panned is derived from it. Measured without this: rotating while
+            // panned to the edge at 2.4x left the offset at 1511 against a new limit of 671, so
+            // the photo showed empty space beside itself until the next wheel notch happened to
+            // re-clamp it.
+            Zoom = _zoom.Clamped(StageFrameWidth, StageFrameHeight);
         }
 
         /// <summary>Height of this thumbnail's slot: the active one stands 12px taller.</summary>
@@ -544,6 +578,97 @@ namespace Fastcull.ViewModels
 
         public Visibility ZoomLoadingVisibility =>
             IsZoomLoading && IsZoomed ? Visibility.Visible : Visibility.Collapsed;
+
+        // ------------------------------------------------------------------
+        // PRD 1.7.1 scale zoom and panning
+        //
+        // The state itself is a Core type (ZoomTransform) so the cursor-anchoring maths is tested
+        // headlessly; these are the bindable projections of it. Scale is a pure render transform
+        // over the zoom-tier image already in memory - a wheel notch must never start a decode.
+        // ------------------------------------------------------------------
+
+        private ZoomTransform _zoom = ZoomTransform.Identity;
+
+        public ZoomTransform Zoom
+        {
+            get => _zoom;
+            private set
+            {
+                if (_zoom == value) return;
+                _zoom = value;
+
+                OnPropertyChanged(nameof(Zoom));
+                OnPropertyChanged(nameof(ZoomScale));
+                OnPropertyChanged(nameof(ZoomOffsetX));
+                OnPropertyChanged(nameof(ZoomOffsetY));
+                OnPropertyChanged(nameof(ZoomPercentText));
+                OnPropertyChanged(nameof(ZoomPercentVisibility));
+            }
+        }
+
+        /// <summary>e.g. "180%". Rounded to whole percent - the scale moves in 20% steps.</summary>
+        public string ZoomPercentText => $"{_zoom.Scale * 100:0}%";
+
+        /// <summary>
+        /// Shown whenever the scale is above the fit, and hidden at exactly 100%.
+        ///
+        /// Deliberately NOT gated on IsInfoVisible. The `I` overlay carries metadata about the
+        /// photo; this carries view state - where the app currently is. A user should not have to
+        /// switch on a metadata overlay to find out how far they have zoomed, so the two are
+        /// independent (PRD 1.7.1).
+        /// </summary>
+        public Visibility ZoomPercentVisibility =>
+            IsZoomed && !_zoom.IsFitted ? Visibility.Visible : Visibility.Collapsed;
+
+        public double ZoomScale => _zoom.Scale;
+        public double ZoomOffsetX => _zoom.OffsetX;
+        public double ZoomOffsetY => _zoom.OffsetY;
+
+        /// <summary>The photo's own frame, which the image exactly fills at scale 1.</summary>
+        private double ViewportWidth => StageFrameWidth;
+        private double ViewportHeight => StageFrameHeight;
+
+        /// <summary>
+        /// Scales toward a cursor position given in coordinates relative to the frame's CENTRE.
+        /// Returns true when anything actually moved, so the caller can leave the event unhandled
+        /// at the rails rather than swallowing it.
+        /// </summary>
+        public bool ScaleZoomAt(double cursorX, double cursorY, int steps)
+        {
+            var updated = _zoom.ScaledAt(cursorX, cursorY, steps, ViewportWidth, ViewportHeight);
+            if (updated == _zoom) return false;
+
+            Zoom = updated;
+            return true;
+        }
+
+        /// <summary>Pans by a drag delta in frame pixels. A no-op at the fit scale, per PRD 1.7.1.</summary>
+        public void PanZoom(double deltaX, double deltaY)
+        {
+            if (_zoom.IsFitted) return;
+
+            Zoom = _zoom.Panned(deltaX, deltaY, ViewportWidth, ViewportHeight);
+        }
+
+        /// <summary>True when there is anything to pan - drives the grab cursor as much as the drag.</summary>
+        public bool CanPan => !_zoom.IsFitted;
+
+        /// <summary>
+        /// Back to fit-and-centred. Called on every zoom entry and every photo change while
+        /// zoomed: carrying a 300% scale onto the next photo would drop the user into a corner of
+        /// a frame they have not seen, with no cue as to where in it they are.
+        /// </summary>
+        public void ResetZoomTransform() => Zoom = ZoomTransform.Identity;
+
+        /// <summary>
+        /// Clips the scaled photo to its own frame, so an enlarged image cannot spill across the
+        /// window. Null unless zoomed: clipping at rest would also clip the rotation sweep, whose
+        /// bounding box momentarily exceeds the frame mid-animation.
+        /// </summary>
+        public RectangleGeometry? StageClip =>
+            IsZoomed && StageFrameWidth > 0 && StageFrameHeight > 0
+                ? new RectangleGeometry { Rect = new Windows.Foundation.Rect(0, 0, StageFrameWidth, StageFrameHeight) }
+                : null;
 
         /// <summary>
         /// Decodes this photo at <paramref name="longEdge"/> for zoom, then swaps it in.

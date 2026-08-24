@@ -216,6 +216,28 @@
                                    Style="{StaticResource InfoValue}"/>
                     </StackPanel>
 
+                    <!-- The exposure triplet, reading the same properties the on-photo overlay
+                         does (PRD 1.5's field table is the single list). No Visibility bindings:
+                         these three always render, with "-" when absent - PRD 1.8.1's deliberate
+                         exception to omit-if-missing. -->
+                    <Grid ColumnDefinitions="*,*,*" Margin="0,0,0,9">
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="FOCAL" Style="{StaticResource InfoLabel}"/>
+                            <TextBlock Text="{x:Bind ViewModel.ActivePhoto.FocalLengthText, Mode=OneWay}"
+                                       Style="{StaticResource InfoValue}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="SHUTTER" Style="{StaticResource InfoLabel}"/>
+                            <TextBlock Text="{x:Bind ViewModel.ActivePhoto.ShutterSpeedText, Mode=OneWay}"
+                                       Style="{StaticResource InfoValue}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="APERTURE" Style="{StaticResource InfoLabel}"/>
+                            <TextBlock Text="{x:Bind ViewModel.ActivePhoto.ApertureText, Mode=OneWay}"
+                                       Style="{StaticResource InfoValue}"/>
+                        </StackPanel>
+                    </Grid>
+
                     <StackPanel Visibility="{x:Bind ViewModel.ActivePhoto.FolderVisibility, Mode=OneWay}">
                         <TextBlock Text="FOLDER" Style="{StaticResource InfoLabel}"/>
                         <TextBlock Text="{x:Bind ViewModel.ActivePhoto.FolderText, Mode=OneWay}"

@@ -46,8 +46,16 @@
              slots, and every dimension is bound from the item rather than assigned to an
              x:Name'd element - ItemsRepeater does not propagate DataContext to realized
              containers under x:Bind, so binding is the path that works. -->
+        <!-- Background=Transparent is load-bearing: a Border with no Background is not
+             hit-testable, so none of the PRD 1.7.1 pointer handlers below would ever fire. -->
         <Border x:Name="StageHost" Grid.Row="0" Padding="{StaticResource StagePadding}"
-                SizeChanged="StageHost_SizeChanged">
+                Background="Transparent"
+                SizeChanged="StageHost_SizeChanged"
+                PointerWheelChanged="StageHost_PointerWheelChanged"
+                PointerPressed="StageHost_PointerPressed"
+                PointerMoved="StageHost_PointerMoved"
+                PointerReleased="StageHost_PointerReleased"
+                PointerCaptureLost="StageHost_PointerCaptureLost">
 
             <!-- StageSlide carries the navigation transition. It paints no background, so it
                  adds no non-black pixels over the stage (PRD 1.10). -->
@@ -87,9 +95,14 @@
                                      sits in a Canvas because every other panel clamps a child's
                                      DesiredSize to the space available, which crushes the swapped
                                      dimension on a quarter turn. -->
+                                <!-- Clip is what stops a scaled photo (PRD 1.7.1) spilling across
+                                     the window. Null unless zoomed, because clipping at rest would
+                                     also clip the rotation sweep, whose bounding box momentarily
+                                     exceeds the frame mid-animation. -->
                                 <Grid x:Name="StageFrame"
                                       Width="{x:Bind StageFrameWidth, Mode=OneWay}"
-                                      Height="{x:Bind StageFrameHeight, Mode=OneWay}">
+                                      Height="{x:Bind StageFrameHeight, Mode=OneWay}"
+                                      Clip="{x:Bind StageClip, Mode=OneWay}">
                                     <Canvas>
                                         <Image x:Name="StagePhoto" Stretch="Uniform"
                                                Source="{x:Bind StageImageSource, Mode=OneWay}"
@@ -106,10 +119,24 @@
                                                  effect: the photo appears to turn from where it
                                                  was to where it already is. Same shape as the
                                                  navigation slide, which also settles at zero. -->
+                                            <!-- Order matters and is load-bearing. Rotations first,
+                                                 both about the centre via RenderTransformOrigin;
+                                                 then PRD 1.7.1's scale, also about the centre; then
+                                                 the pan, which lands last so its offsets are in
+                                                 final screen pixels rather than in rotated or
+                                                 pre-scale space.
+
+                                                 The animated rotation is still Children[1] -
+                                                 FindRotationDelta resolves it by index, so the two
+                                                 new transforms are appended rather than inserted. -->
                                             <Image.RenderTransform>
                                                 <TransformGroup>
                                                     <RotateTransform Angle="{x:Bind RotationAngle, Mode=OneWay}"/>
                                                     <RotateTransform/>
+                                                    <ScaleTransform ScaleX="{x:Bind ZoomScale, Mode=OneWay}"
+                                                                    ScaleY="{x:Bind ZoomScale, Mode=OneWay}"/>
+                                                    <TranslateTransform X="{x:Bind ZoomOffsetX, Mode=OneWay}"
+                                                                        Y="{x:Bind ZoomOffsetY, Mode=OneWay}"/>
                                                 </TransformGroup>
                                             </Image.RenderTransform>
                                         </Image>
@@ -164,12 +191,34 @@
                                         </StackPanel>
                                     </Border>
 
+                                    <!-- Lower-LEFT stack: the zoom percentage sits above the info
+                                         overlay. They share this corner but are independent - one
+                                         is view state, the other is photo metadata (PRD 1.7.1) -
+                                         so a StackPanel is what keeps them from colliding. A fixed
+                                         margin cannot: the overlay's height changes as fields omit
+                                         themselves, and 240% was measurably landing on top of the
+                                         device row. A collapsed child takes no space, so each
+                                         shows or hides without moving the other. -->
+                                    <StackPanel HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                                                Margin="10,0,0,14" Spacing="6">
+
+                                        <!-- PRD 1.7.1 zoom percentage. Driven purely by the scale,
+                                             NOT by the I toggle. -->
+                                        <Border HorizontalAlignment="Left"
+                                                CornerRadius="9" Padding="8,3"
+                                                Background="#B0000000"
+                                                Visibility="{x:Bind ZoomPercentVisibility, Mode=OneWay}">
+                                            <TextBlock Text="{x:Bind ZoomPercentText, Mode=OneWay}"
+                                                       FontSize="10" CharacterSpacing="80"
+                                                       Foreground="{StaticResource Accent300Brush}"/>
+                                        </Border>
+
                                     <!-- PRD 1.8.1: the info overlay. Lower-LEFT on purpose - the
                                          opposite corner from the star badge and the loading
                                          indicator above, which is the whole reason this side was
                                          chosen. Each row hides itself when its field is absent. -->
-                                    <Border HorizontalAlignment="Left" VerticalAlignment="Bottom"
-                                            Margin="10,0,0,14" CornerRadius="4" Padding="10,7"
+                                    <Border HorizontalAlignment="Left"
+                                            CornerRadius="4" Padding="10,7"
                                             Background="#C0000000"
                                             Visibility="{x:Bind InfoOverlayVisibility, Mode=OneWay}">
                                         <StackPanel Spacing="3">
@@ -189,12 +238,31 @@
                                                        Visibility="{x:Bind PlaceVisibility, Mode=OneWay}"
                                                        FontSize="10"
                                                        Foreground="{StaticResource Accent300Brush}"/>
+                                            <!-- The exposure triplet. No Visibility binding on
+                                                 purpose: these three ALWAYS render, showing "-"
+                                                 when the file has no figure, which is PRD 1.8.1's
+                                                 deliberate exception to omit-if-missing. Adding a
+                                                 Visibility here would be the regression that
+                                                 section warns about. -->
+                                            <StackPanel Orientation="Horizontal" Spacing="10" Margin="0,2,0,0">
+                                                <TextBlock Text="{x:Bind FocalLengthText, Mode=OneWay}"
+                                                           FontSize="10"
+                                                           Foreground="{StaticResource Neutral300Brush}"/>
+                                                <TextBlock Text="{x:Bind ShutterSpeedText, Mode=OneWay}"
+                                                           FontSize="10"
+                                                           Foreground="{StaticResource Neutral300Brush}"/>
+                                                <TextBlock Text="{x:Bind ApertureText, Mode=OneWay}"
+                                                           FontSize="10"
+                                                           Foreground="{StaticResource Neutral300Brush}"/>
+                                            </StackPanel>
+
                                             <TextBlock Text="{x:Bind FolderText, Mode=OneWay}"
                                                        Visibility="{x:Bind FolderVisibility, Mode=OneWay}"
                                                        FontSize="9" CharacterSpacing="40"
                                                        Foreground="{StaticResource Neutral700Brush}"/>
                                         </StackPanel>
                                     </Border>
+                                    </StackPanel>
                                 </Grid>
 
                                 <!-- The Chromeless weight bar that used to sit here, below the

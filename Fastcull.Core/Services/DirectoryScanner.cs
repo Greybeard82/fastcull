@@ -64,6 +64,18 @@ namespace Fastcull.Services
         public double? Latitude { get; init; }
         public double? Longitude { get; init; }
 
+        // The exposure triplet (PRD 1.5 / 1.8.1). Stored as MetadataExtractor's own descriptions -
+        // "100 mm", "1/125 sec", "f/5.6" - which are already the display form, so nothing
+        // downstream has to re-derive a rational into something readable.
+        //
+        // Null here means the file carried no figure. Unlike every other field on this type, the
+        // UI renders that as "-" rather than omitting the row: for these three, absence is itself
+        // information (an adapted or fully manual lens records no aperture). PRD 1.8.1 sets this
+        // out as a deliberate exception and asks that it not be tidied back into consistency.
+        public string? FocalLength { get; init; }
+        public string? ShutterSpeed { get; init; }
+        public string? Aperture { get; init; }
+
         public bool HasCoordinates => Latitude is not null && Longitude is not null;
     }
 
@@ -186,6 +198,7 @@ namespace Fastcull.Services
             var (sortTime, source, subsecMs) = ResolveSortTime(directories, filePath);
             var (width, height) = ReadDimensions(directories);
             var (latitude, longitude) = ReadCoordinates(directories);
+            var exposure = ReadExposure(directories);
             var fileBytes = new FileInfo(filePath).Length;
 
             return new ScannedPhoto
@@ -203,7 +216,40 @@ namespace Fastcull.Services
                 PixelHeight = height,
                 Latitude = latitude,
                 Longitude = longitude,
+                FocalLength = exposure.FocalLength,
+                ShutterSpeed = exposure.ShutterSpeed,
+                Aperture = exposure.Aperture,
             };
+        }
+
+        /// <summary>
+        /// Focal length, exposure time and f-number, as MetadataExtractor's own descriptions.
+        ///
+        /// Every EXIF SubIFD is consulted rather than only the first: a RAW container commonly
+        /// carries more than one, and the one describing the sensor data is not the one holding
+        /// the capture settings - the same reason <see cref="ResolveSortTime"/> walks them all.
+        /// </summary>
+        internal static (string? FocalLength, string? ShutterSpeed, string? Aperture) ReadExposure(
+            IReadOnlyList<MetadataExtractor.Directory> directories)
+        {
+            string? focal = null, shutter = null, aperture = null;
+
+            foreach (var sub in directories.OfType<ExifSubIfdDirectory>())
+            {
+                focal ??= Clean(sub.GetDescription(ExifDirectoryBase.TagFocalLength));
+                shutter ??= Clean(sub.GetDescription(ExifDirectoryBase.TagExposureTime));
+                aperture ??= Clean(sub.GetDescription(ExifDirectoryBase.TagFNumber));
+
+                if (focal is not null && shutter is not null && aperture is not null) break;
+            }
+
+            return (focal, shutter, aperture);
+
+            static string? Clean(string? raw)
+            {
+                var trimmed = raw?.Trim();
+                return string.IsNullOrEmpty(trimmed) ? null : trimmed;
+            }
         }
 
         private static IReadOnlyList<MetadataExtractor.Directory> ReadMetadata(string filePath)

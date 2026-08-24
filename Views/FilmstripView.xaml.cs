@@ -175,13 +175,25 @@ namespace Fastcull.Views
             if (!ViewModel.IsZoomed)
             {
                 _zoomLoadedItem?.ReleaseZoomImage();
+                _zoomLoadedItem?.ResetZoomTransform();
                 _zoomLoadedItem = null;
                 _zoomLoadedEdge = 0;
+                _isPanning = false;
                 return;
             }
 
             var item = ViewModel.ActiveItem;
             if (item is null) return;
+
+            // PRD 1.7.1: scale and pan reset on every entry to zoom and every change of photo.
+            // Reset before the guard below, not after, because a same-photo re-request at a new
+            // size returns early and must NOT throw away a scale the user has already dialled in
+            // mid-zoom - the fullscreen transition triggers exactly that re-request.
+            if (!ReferenceEquals(item, _zoomLoadedItem))
+            {
+                item.ResetZoomTransform();
+                _isPanning = false;
+            }
 
             var longEdge = ComputeZoomLongEdge(item);
             if (longEdge == 0) return;
@@ -272,6 +284,109 @@ namespace Fastcull.Views
 
             AnimateZoom(before.Value, after.Value);
         }
+
+        // ------------------------------------------------------------------
+        // PRD 1.7.1: mouse-wheel scale zoom and click-drag panning
+        //
+        // Only ever active while zoomed. In stage view the wheel and the pointer belong to the
+        // bottom filmstrip (PRD 2.4), and none of these handlers touch anything unless IsZoomed.
+        // ------------------------------------------------------------------
+
+        private bool _isPanning;
+        private Point _panLastPosition;
+
+        /// <summary>The active photo's frame element, or null when it is not realized.</summary>
+        private FrameworkElement? FindActiveStageFrame()
+        {
+            if (ViewModel.ActiveItem is null) return null;
+
+            var slot = ViewModel.StageItems.IndexOf(ViewModel.ActiveItem);
+            if (slot < 0) return null;
+
+            if (StageRepeater.TryGetElement(slot) is not FrameworkElement container) return null;
+            return container.FindName("StageFrame") as FrameworkElement;
+        }
+
+        /// <summary>
+        /// The pointer's position relative to the active frame's CENTRE, which is the coordinate
+        /// space ZoomTransform works in. Null when the pointer is outside the photo, so a wheel
+        /// notch over the black letterbox does not anchor to a point that is not on the image.
+        /// </summary>
+        private Point? PointerInFrame(PointerRoutedEventArgs e)
+        {
+            var frame = FindActiveStageFrame();
+            if (frame is null || frame.ActualWidth <= 0 || frame.ActualHeight <= 0) return null;
+
+            var p = e.GetCurrentPoint(frame).Position;
+
+            if (p.X < 0 || p.Y < 0 || p.X > frame.ActualWidth || p.Y > frame.ActualHeight) return null;
+
+            return new Point(p.X - frame.ActualWidth / 2, p.Y - frame.ActualHeight / 2);
+        }
+
+        private void StageHost_PointerWheelChanged(object sender, PointerRoutedEventArgs e)
+        {
+            if (!ViewModel.IsZoomed || ViewModel.ActiveItem is null) return;
+
+            var delta = e.GetCurrentPoint(StageHost).Properties.MouseWheelDelta;
+            if (delta == 0) return;
+
+            // One notch is 120; a high-resolution wheel can report fractions of that, and dividing
+            // would round them to zero and make the wheel feel dead. Sign is enough.
+            var steps = delta > 0 ? 1 : -1;
+
+            // Anchor to the pointer when it is over the photo; fall back to the centre when it is
+            // over the letterbox, which zooms without a preferred point rather than doing nothing.
+            var anchor = PointerInFrame(e) ?? new Point(0, 0);
+
+            if (ViewModel.ActiveItem.ScaleZoomAt(anchor.X, anchor.Y, steps))
+                e.Handled = true;
+        }
+
+        private void StageHost_PointerPressed(object sender, PointerRoutedEventArgs e)
+        {
+            if (!ViewModel.IsZoomed || ViewModel.ActiveItem is null) return;
+            if (!ViewModel.ActiveItem.CanPan) return;          // nothing to pan at the fit scale
+
+            var point = e.GetCurrentPoint(StageHost);
+            if (!point.Properties.IsLeftButtonPressed) return;
+
+            _isPanning = StageHost.CapturePointer(e.Pointer);
+            _panLastPosition = point.Position;
+            e.Handled = _isPanning;
+        }
+
+        private void StageHost_PointerMoved(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isPanning || ViewModel.ActiveItem is null) return;
+
+            var position = e.GetCurrentPoint(StageHost).Position;
+
+            // Deltas rather than an absolute origin: the clamp can stop the image short of the
+            // pointer, and anchoring to where the drag began would then make the photo lurch when
+            // the pointer came back off the edge.
+            ViewModel.ActiveItem.PanZoom(position.X - _panLastPosition.X, position.Y - _panLastPosition.Y);
+
+            _panLastPosition = position;
+            e.Handled = true;
+        }
+
+        private void StageHost_PointerReleased(object sender, PointerRoutedEventArgs e)
+        {
+            if (!_isPanning) return;
+
+            StageHost.ReleasePointerCapture(e.Pointer);
+            _isPanning = false;
+            e.Handled = true;
+        }
+
+        /// <summary>
+        /// Capture can be lost without a release - the window deactivating, or the pointer being
+        /// taken by another element. Without this the drag would stay armed and the next pointer
+        /// move would jump the image.
+        /// </summary>
+        private void StageHost_PointerCaptureLost(object sender, PointerRoutedEventArgs e)
+            => _isPanning = false;
 
         /// <summary>Centre and height of the active photo's frame, in StageHost coordinates.</summary>
         private (Point Centre, double Height)? MeasureActivePhoto()

@@ -114,15 +114,20 @@ Paired is the default because it matches how a camera shooting RAW+JPEG behaves,
     - **The whole section hides when the scanned folder has no subfolders.** A tree of one node says nothing the folder name above it does not.
   - **Active Photo panel.** Five fields describing whichever photo is currently active, updating live as the cursor moves:
 
-    | Field | Source |
-    | :--- | :--- |
-    | **Device** | EXIF camera make + model |
-    | **Resolution** | pixel dimensions, plus megapixels |
-    | **Captured** | the resolved capture date (§1.3), which already carries its source tier |
-    | **Place** | reverse-geocoded place name from EXIF GPS — see §1.8's geocoding note |
-    | **Folder** | the containing folder, relative to the scan root |
+    | Field | Source | Missing value |
+    | :--- | :--- | :--- |
+    | **Device** | EXIF camera make + model | omitted |
+    | **Resolution** | pixel dimensions, plus megapixels | omitted |
+    | **Captured** | the resolved capture date (§1.3), which already carries its source tier | omitted |
+    | **Place** | reverse-geocoded place name from EXIF GPS — see §1.8's geocoding note | omitted |
+    | **Folder** | the containing folder, relative to the scan root | omitted |
+    | **Focal length** | EXIF | **shows `-`** |
+    | **Shutter** | EXIF exposure time | **shows `-`** |
+    | **Aperture** | EXIF f-number | **shows `-`** |
 
-    **Absent fields are omitted, never shown blank or as a placeholder.** This is the same rule §1.8 already sets for the HUD, and it applies here for the same reason: a PNG has no camera model and most files have no GPS at all. A panel that renders `Device: —` for half a folder is worse than one that renders four fields instead of five.
+    **Absent fields are omitted, never shown blank or as a placeholder** — with the three exposure fields as a deliberate exception. The general rule exists because a PNG has no camera model and most files have no GPS at all, and a panel that renders `Device: —` for half a folder is worse than one that renders four fields instead of five. The exception, and why it is one, is set out in §1.8.1; it is intentional and should not be reconciled back into the general rule.
+
+    This table is the single field list. The on-photo overlay (§1.8.1) renders the same properties off the same view-model rather than restating them.
 
   - **Scan progress pill** — see §1.2.
   - **Finish Session is a disabled placeholder** carrying a "coming soon" tooltip. §4.1's modal and the entire batch copy/move path do not exist; a button that looked live would be a lie. The tooltip sits on a wrapping element because a disabled WinUI control receives no pointer input and would never show one.
@@ -228,12 +233,40 @@ A working zoom exists and is in daily use. **It is not the Tier A / Tier B desig
 | Designed above | Status |
 | :--- | :--- |
 | True pixel-level Tier A / Tier B decode beyond the embedded preview | **Not built.** There is one path: the embedded preview, at whatever size the container holds. A RAW whose preview fell below `FullResIsCheap` would have no full-resolution destination at all (§7) |
-| Panning at 1:1 | **Not built.** The photo is fit to the stage; there is no pan offset to preserve, and the arrow keys still navigate and rate |
+| Panning at 1:1 | **Not built.** The photo is fit to the stage; there is no pan offset to preserve, and the arrow keys still navigate and rate. Superseded in part by the scale zoom below, which introduces a pan offset for the first time — but by mouse, not by keyboard, and against the zoom-tier image rather than true 1:1 pixels |
 | Metadata HUD in zoom (`I`) | **Not built** — §1.8 is unbuilt entirely |
 | `A` / `D` navigation while zoomed | **Not built.** `A` and `S` remain rotation in both modes (§1.11); §2.2's `A`/`D` binding was never implemented |
 | Zoom level and pan persisting across navigation | **Not applicable** while there is neither a zoom level nor a pan offset |
 
 Because the zoom is fit-to-stage rather than 1:1, it answers "is this frame sharp enough and well composed" but **not** "is critical focus on the eye". The latter needs panning at true 1:1, and that remains the v0.2 work this section describes.
+
+#### 1.7.1 Scale zoom and panning (specified, not yet built)
+
+Fit-to-stage is the floor, not the ceiling. The mouse drives a scale factor on top of it, so a detail can be enlarged without leaving zoom mode.
+
+**Scale, by mouse wheel:**
+
+- **Wheel up** increases scale in **20% increments**, to a maximum of **300%**.
+- **Wheel down** decreases scale in 20% increments, to a floor of **100%** — which is the existing fit-to-stage level the `Space` bar already produces. 100% is a floor, not a midpoint: there is no zooming out past the fit.
+- **Scale anchors to the cursor, not to the image centre.** The image point under the pointer before the scale change is the same point under the pointer after it. Scrolling into a detail keeps that detail where it is; recentring on the image middle would push whatever the user was looking at off toward the edge, which is the opposite of the intent.
+
+**Panning, by left-click-drag:**
+
+- **Above 100%,** left-click-and-drag moves the visible portion of the image within the viewport.
+- **Clamped to the image's own edges.** The image can never be dragged inward past its bounds, so no empty space appears beyond it. Clamping is **per axis**: at a given scale the image may overflow the viewport horizontally but not vertically, in which case it pans horizontally only and stays vertically centred.
+- **At exactly 100% panning is a no-op.** The image already fits, so there is nothing to pan to. Dragging does nothing rather than rubber-banding or nudging.
+
+**What scale does NOT do: trigger a decode.** Scaling is a pure render transform over the zoom-tier image already in memory. A wheel step must never start a new decode — twenty scroll steps would otherwise queue twenty decodes of the same photo, which is precisely the "space heater" failure §1.7 already warns about. The consequence is honest and worth stating: **above 100% the image is being enlarged past its decoded resolution and will soften.** True detail at scale needs the Tier B path, which remains unbuilt.
+
+**Reset:** scale and pan reset to 100% and centred on **every entry to zoom** and on **every change of photo while zoomed**. Carrying a 300% scale onto the next photo would drop the user into a corner of a frame they have not seen yet, with no cue as to where in it they are.
+
+**Overlays are unaffected by scale and pan.** The info overlay (§1.8.1, lower-left) and the loading indicator (§1.7, lower-right) are anchored to the viewport, not to the image, so they hold their corners at any scale or offset rather than sliding off with the photo.
+
+**Zoom-percentage indicator.** The current scale reads as a percentage — `180%` — in the **lower-left**, beside where the info overlay sits.
+
+- **Visible whenever scale is above 100%; hidden at exactly 100%.** At the fit scale there is no scale to report, and a permanent `100%` would be chrome that never says anything.
+- **Independent of the `I` toggle.** This is deliberate and is the point of listing it separately: `I` governs *photo metadata* — facts about the file — while the zoom percentage is *view state*, a fact about where the app currently is. Those are different kinds of information and the user should not have to turn on a metadata overlay to find out how far they have zoomed. It shows whether `I` is on or off.
+- **Updates live** as the wheel turns, in step with the scale itself.
 
 ### 1.8 Metadata HUD
 
@@ -244,7 +277,19 @@ Because the zoom is fit-to-stage rather than 1:1, it answers "is this frame shar
 
 #### 1.8.1 Info overlay — the built subset
 
-`I` toggles an on-photo overlay carrying **the same five fields as the sidebar's Active Photo panel** (§1.5): device, resolution, capture date, place, folder. It is a strict subset of the full HUD above, sharing the same source data, so building the rest later is adding fields rather than rebuilding the surface.
+`I` toggles an on-photo overlay carrying **the same fields as the sidebar's Active Photo panel** (§1.5): device, resolution, capture date, place, folder, plus the three exposure fields below. It is a strict subset of the full HUD above, sharing the same source data — the two surfaces read the same properties off the same view-model, so they cannot drift apart and the field list is not written twice.
+
+**Exposure triplet: focal length, shutter speed, aperture.** These are what a photographer checks when a frame looks soft or misjudged, so they sit together and read as a group.
+
+> **Deliberate exception to the omit-if-missing rule, and it must stay one.**
+>
+> Everywhere else in this app an absent metadata field is **omitted entirely** — §1.5 says so, and the reasoning holds: a panel rendering `Device: —` for half a folder is worse than one rendering four rows.
+>
+> **Focal length, shutter speed and aperture are exempt. They always render their label, with `-` as the value when the file carries no figure.**
+>
+> The reason is that for these three, *absence is itself information the photographer wants*. A frame with no aperture recorded is a frame shot on an adapted or manual lens — that is a fact about the shot, and one that explains a soft result. Omitting the row would hide it, and worse, would make the overlay's height jump around as the cursor moves through a mixed folder, which makes the group hard to read at a glance precisely when it is being scanned quickly.
+>
+> This is not an oversight to be tidied up later into consistency with the other fields. If a future change makes these three omit-if-missing, it is a regression.
 
 - **Lower-left corner of the active photo.** Deliberately not lower-right: that corner is taken by the star-rating badge and by the zoom loading indicator (§1.7), and stacking three things there would collide at the exact moment all three are most likely to be on screen at once.
 - **Works in both normal stage view and while zoomed.** The same overlay, positioned against whatever the photo's rendered box currently is.
@@ -354,6 +399,19 @@ Bare `Ctrl` is **not** used as a toggle: it is a modifier, it fires as part of e
 | `I` | Toggle the info overlay (§1.8.1) — the same overlay as in filmstrip mode, positioned against the zoomed photo's box |
 | `Space` or `Esc` | Exit to filmstrip |
 | ~~`Arrow keys` pan~~, ~~`PgUp`/`PgDn`~~ | Not implemented |
+
+**Mouse, in zoom mode (§1.7.1 — specified, not yet built).** Zoom mode is the only place in the app where the mouse does more than click a thumbnail:
+
+| Input | Behaviour |
+| :--- | :--- |
+| `Wheel up` | Scale +20% per step, capped at 300%, anchored to the cursor |
+| `Wheel down` | Scale −20% per step, floored at 100% (fit-to-stage) |
+| `Left-drag` | Pan the image, clamped to its own edges. Above 100% only |
+| `Left-drag` at 100% | No-op — the image already fits |
+
+The zoom percentage (§1.7.1) appears in the lower-left while scale is above 100%. It is **not** on the `I` toggle: `I` shows metadata about the photo, the percentage shows where the view is, and one should not be hidden behind the other.
+
+Note this does not extend §2.4's rule. Arrow keys remain owned by the stage and are still navigation and rating in zoom mode; the wheel and the drag are new inputs on a surface that previously ignored both, not a reassignment of anything.
 
 Input routing is handled in one place at window level, per §2.4 — `MainWindow.RootGrid_PreviewKeyDown`, a tunnelling handler that claims every mapped key before any focused child can consume it. Unmapped keys log at debug level rather than being silently swallowed. What does not yet exist is the *two-state* part: the router is currently mode-agnostic.
 
