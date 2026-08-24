@@ -133,10 +133,196 @@ namespace Fastcull.ViewModels
         /// </summary>
         public bool DismissTopmost()
         {
+            // Ahead of the help overlay: the finish confirmation is modal and the last thing
+            // before files would move, so it is unambiguously what Escape means while it is up.
+            if (IsFinishVisible) { CancelFinish(); return true; }
             if (IsHelpVisible) { IsHelpVisible = false; return true; }
             if (IsZoomed) { IsZoomed = false; return true; }
             if (IsFullScreen) { IsFullScreen = false; return true; }
             return false;
+        }
+
+        // ------------------------------------------------------------------
+        // Finish Session (PRD 4.2)
+        // ------------------------------------------------------------------
+
+        private bool _isFinishVisible;
+
+        /// <summary>Whether the finish confirmation is up. Modal, unlike the help overlay.</summary>
+        public bool IsFinishVisible
+        {
+            get => _isFinishVisible;
+            set
+            {
+                if (_isFinishVisible == value) return;
+                _isFinishVisible = value;
+                OnPropertyChanged(nameof(IsFinishVisible));
+            }
+        }
+
+        private FinishOperation _finishOperation = FinishOperation.None;
+
+        /// <summary>
+        /// Move or Copy. **Starts at None every time the screen opens, and that is the point**
+        /// (PRD 4.2): Move is destructive, Copy is not, they sit one click apart, and a default
+        /// would be the app making that call on the user's behalf at the worst possible moment.
+        /// </summary>
+        public FinishOperation FinishOperation
+        {
+            get => _finishOperation;
+            set
+            {
+                if (_finishOperation == value) return;
+                _finishOperation = value;
+                OnPropertyChanged(nameof(FinishOperation));
+                OnPropertyChanged(nameof(CanConfirmFinish));
+                OnPropertyChanged(nameof(IsMoveChosen));
+                OnPropertyChanged(nameof(IsCopyChosen));
+                OnPropertyChanged(nameof(CopyBorderBrush));
+                OnPropertyChanged(nameof(CopyTextBrush));
+                OnPropertyChanged(nameof(MoveBorderBrush));
+                OnPropertyChanged(nameof(MoveTextBrush));
+            }
+        }
+
+        public bool IsMoveChosen => FinishOperation == FinishOperation.Move;
+        public bool IsCopyChosen => FinishOperation == FinishOperation.Copy;
+
+        // Brushes resolved here rather than through converters, matching SidebarViewModel.PinBrush:
+        // the theme dictionary stays the single source of colour, and the XAML stays declarative
+        // without three new converter classes for one screen.
+        public Microsoft.UI.Xaml.Media.Brush CopyBorderBrush => ChoiceBrush(IsCopyChosen, border: true);
+        public Microsoft.UI.Xaml.Media.Brush CopyTextBrush => ChoiceBrush(IsCopyChosen, border: false);
+        public Microsoft.UI.Xaml.Media.Brush MoveBorderBrush => ChoiceBrush(IsMoveChosen, border: true);
+        public Microsoft.UI.Xaml.Media.Brush MoveTextBrush => ChoiceBrush(IsMoveChosen, border: false);
+
+        private static Microsoft.UI.Xaml.Media.Brush ChoiceBrush(bool chosen, bool border)
+        {
+            var key = chosen
+                ? (border ? "AccentBrush" : "Accent200Brush")
+                : (border ? "Neutral900Brush" : "Neutral500Brush");
+
+            return (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[key];
+        }
+
+        public Visibility FinishResultVisibility =>
+            HasFinishResult ? Visibility.Visible : Visibility.Collapsed;
+
+        /// <summary>The gate on the Confirm button. Nothing else disables it.</summary>
+        public bool CanConfirmFinish => FinishOperation != FinishOperation.None;
+
+        private FinishPlan? _finishSummary;
+
+        /// <summary>
+        /// The counts shown on the confirmation, computed by the same <see cref="FinishPlanner"/>
+        /// that computes destinations. Deliberately not a second tally: if the summary were
+        /// counted separately from the bucketing, the screen could show numbers the plan does not
+        /// honour, and the one thing this screen must not do is misdescribe what is about to
+        /// happen.
+        /// </summary>
+        public FinishPlan? FinishSummary => _finishSummary;
+
+        public string FinishApprovedText => (_finishSummary?.ApprovedCount ?? 0).ToString();
+        public string FinishRejectedText => (_finishSummary?.RejectedCount ?? 0).ToString();
+        public string FinishUnratedText => (_finishSummary?.UntouchedCount ?? 0).ToString();
+        public string FinishTotalText => (_finishSummary?.Total ?? 0).ToString();
+        public string FinishAffectedText => (_finishSummary?.AffectedCount ?? 0).ToString();
+        public string FinishStar1Text => StarText(1);
+        public string FinishStar2Text => StarText(2);
+        public string FinishStar3Text => StarText(3);
+        public string FinishStar4Text => StarText(4);
+        public string FinishStar5Text => StarText(5);
+        private string StarText(int stars) => (_finishSummary?.StarCount(stars) ?? 0).ToString();
+
+        /// <summary>Names the session on the confirmation, so it is obvious which job is finishing.</summary>
+        public string FinishSessionTitle => Sidebar.SessionName;
+
+        private string _finishResult = string.Empty;
+
+        /// <summary>Where the dry-run log ended up, shown after Confirm.</summary>
+        public string FinishResult
+        {
+            get => _finishResult;
+            private set
+            {
+                if (_finishResult == value) return;
+                _finishResult = value;
+                OnPropertyChanged(nameof(FinishResult));
+                OnPropertyChanged(nameof(HasFinishResult));
+                OnPropertyChanged(nameof(FinishResultVisibility));
+            }
+        }
+
+        public bool HasFinishResult => !string.IsNullOrEmpty(FinishResult);
+
+        /// <summary>
+        /// Opens the confirmation, recomputing the summary from the live sequence. The choice is
+        /// reset to None on every open rather than remembered from last time - a remembered Move
+        /// is a default wearing a disguise.
+        /// </summary>
+        public void BeginFinish()
+        {
+            if (IsEmpty || Items.Count == 0) return;
+
+            FinishOperation = FinishOperation.None;
+            FinishResult = string.Empty;
+            _finishSummary = BuildPlan(FinishOperation.None);
+
+            NotifySummaryChanged();
+            IsFinishVisible = true;
+        }
+
+        public void CancelFinish()
+        {
+            IsFinishVisible = false;
+            FinishOperation = FinishOperation.None;
+            FinishResult = string.Empty;
+        }
+
+        private FinishPlan BuildPlan(FinishOperation operation) => FinishPlanner.Plan(
+            CurrentFolder ?? string.Empty,
+            operation,
+            Items.Select(i => (i.Photo.FilePath, i.Photo.RelativePath, i.CullState)));
+
+        private void NotifySummaryChanged()
+        {
+            foreach (var name in new[]
+            {
+                nameof(FinishSummary), nameof(FinishApprovedText), nameof(FinishRejectedText),
+                nameof(FinishUnratedText), nameof(FinishTotalText), nameof(FinishAffectedText),
+                nameof(FinishStar1Text), nameof(FinishStar2Text), nameof(FinishStar3Text),
+                nameof(FinishStar4Text), nameof(FinishStar5Text), nameof(FinishSessionTitle),
+            })
+            {
+                OnPropertyChanged(name);
+            }
+        }
+
+        /// <summary>
+        /// PRD 4.2.1's dry run. Computes every destination and writes the plan to a log.
+        ///
+        /// **Moves and copies nothing.** Stage 2 turns this into real file operations; until then
+        /// the only thing Confirm can do to a photograph is describe it.
+        ///
+        /// The render and the write both happen on a worker: CLAUDE.md's UI-thread rule has no
+        /// exception for a file that is only a few hundred kilobytes.
+        /// </summary>
+        public async Task ConfirmFinishAsync()
+        {
+            if (!CanConfirmFinish) return;
+
+            var plan = BuildPlan(FinishOperation);
+            var timestamp = DateTimeOffset.Now;
+
+            var logPath = await Task.Run(() => FinishPlanner.WriteLog(plan, timestamp))
+                .ConfigureAwait(true);
+
+            // Debug too, so the plan is visible without hunting for the file during development.
+            System.Diagnostics.Debug.WriteLine(FinishPlanner.Render(plan, timestamp));
+
+            FinishResult = logPath is null
+                ? $"DRY RUN complete - {plan.AffectedCount} files planned. The log could not be written."
+                : $"DRY RUN complete - {plan.AffectedCount} files planned, nothing moved.\n{logPath}";
         }
 
         /// <summary>
@@ -269,6 +455,12 @@ namespace Fastcull.ViewModels
             Sidebar.SetFolder(null);
             Sidebar.SetActivePhoto(null);
             Sidebar.CompleteScan();
+            Sidebar.SessionName = string.Empty;
+
+            // Nothing loaded, so nothing to finish. The dropdown is still populated on purpose:
+            // the empty state is exactly where reopening a prior session is most useful.
+            Sidebar.CanFinishSession = false;
+            RefreshSessions();
             RefreshTally();
             Sidebar.UpdateFormats(System.Array.Empty<(string, FormatFamily)>());
             Sidebar.UpdateFolderTree(string.Empty, System.Array.Empty<FolderTreeEntry>());
@@ -310,7 +502,12 @@ namespace Fastcull.ViewModels
         /// Loads and resumes a folder. The single path both launch and the sidebar's
         /// change-folder control run, so there is no separate "open" flow to drift out of step.
         /// </summary>
-        public async Task OpenFolderAsync(string root)
+        /// <param name="sessionName">
+        /// PRD 4.1's optional name, supplied only when creating a session. Null on every other
+        /// path - reopening a named session must not erase its name just because the reopen came
+        /// through the folder picker.
+        /// </param>
+        public async Task OpenFolderAsync(string root, string? sessionName = null)
         {
             if (string.IsNullOrWhiteSpace(root)) return;
 
@@ -378,7 +575,7 @@ namespace Fastcull.ViewModels
             Dictionary<string, StoredPhotoState> stored = new(StringComparer.OrdinalIgnoreCase);
             try
             {
-                _sessionStore = await SessionStore.OpenAsync(root);
+                _sessionStore = await SessionStore.OpenAsync(root, name: sessionName);
                 await _sessionStore.RegisterPhotosAsync(sorted);
                 stored = await _sessionStore.LoadPhotoStatesAsync();
             }
@@ -387,6 +584,12 @@ namespace Fastcull.ViewModels
                 System.Diagnostics.Debug.WriteLine($"[FastCull] Session persistence unavailable: {ex}");
                 _sessionStore = null;
             }
+
+            // The name comes from the store when there is one, so a reopened session shows the
+            // name it was given rather than the folder it happens to live in. With no store - a
+            // locked or corrupt database - the folder name is still the right answer.
+            Sidebar.SessionName = _sessionStore?.DisplayName ?? SessionStore.Describe(sessionName, root);
+            RefreshSessions();
 
             Items.Clear();
             var index = 0;
@@ -413,7 +616,28 @@ namespace Fastcull.ViewModels
                 Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
                 sorted.Select((p, i) => new FolderTreeEntry(p.RelativePath, i)));
 
+            Sidebar.CanFinishSession = Items.Count > 0;
+
             SetActiveIndex(Items.Count > 0 ? 0 : -1);
+        }
+
+        /// <summary>
+        /// Repopulates PRD 4.1's dropdown. Enumerating the session databases touches disk, so it
+        /// runs on a worker; the collection is then filled back on the UI thread.
+        /// </summary>
+        public async void RefreshSessions()
+        {
+            try
+            {
+                var sessions = await Task.Run(() => SessionStore.ListSessions()).ConfigureAwait(true);
+                Sidebar.SetSessions(sessions, CurrentFolder);
+            }
+            catch (Exception ex)
+            {
+                // A missing or unreadable sessions directory costs the dropdown its contents and
+                // nothing else - the open folder is unaffected.
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Could not list sessions: {ex}");
+            }
         }
 
         /// <summary>

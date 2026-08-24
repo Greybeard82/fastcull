@@ -84,6 +84,12 @@
                  it is open. -->
             <views:HelpOverlayView x:Name="HelpOverlay" Grid.Column="0" Grid.ColumnSpan="2"
                                    Visibility="Collapsed"/>
+
+            <!-- Finish Session confirmation (PRD 4.2). Last in the row so it sits above the help
+                 overlay as well as the sidebar - it is modal, and something drawn over a modal
+                 would be a way to click past it. -->
+            <views:FinishSessionView x:Name="FinishOverlay" Grid.Column="0" Grid.ColumnSpan="2"
+                                     Visibility="Collapsed"/>
         </Grid>
     </Grid>
 </Window>

@@ -46,6 +46,34 @@ namespace Fastcull.Views
         private void ChangeFolder_Click(object sender, RoutedEventArgs e) => ViewModel.RequestChangeFolder();
 
         /// <summary>
+        /// PRD 4.1. Same reasoning as ChangeFolder: the name prompt is a ContentDialog and the
+        /// picker needs a window handle, and neither belongs to this control.
+        /// </summary>
+        private void CreateSession_Click(object sender, RoutedEventArgs e) => ViewModel.RequestCreateSession();
+
+        private void FinishSession_Click(object sender, RoutedEventArgs e) => ViewModel.RequestFinishSession();
+
+        /// <summary>
+        /// Reports a pick to the view-model, which ignores it when the chosen session is already
+        /// the open one - which is what happens every time the list is rebuilt after an open.
+        /// </summary>
+        private void SessionDropdown_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (sender is ComboBox combo) ViewModel.SelectSession(combo.SelectedIndex);
+        }
+
+        /// <summary>
+        /// Keeps the panel up while the list is open. The popup is drawn outside the panel's
+        /// bounds, so without this the pointer leaves SidebarHost, the auto-hide collapses the
+        /// panel, and the list the user just opened disappears with it.
+        /// </summary>
+        private void SessionDropdown_DropDownOpened(object sender, object e)
+            => ViewModel.IsSessionPickerOpen = true;
+
+        private void SessionDropdown_DropDownClosed(object sender, object e)
+            => ViewModel.IsSessionPickerOpen = false;
+
+        /// <summary>
         /// Selecting a folder moves the cursor to its first photo. It deliberately does not filter
         /// the sequence - see the note on FolderNode.FirstPhotoIndex.
         /// </summary>

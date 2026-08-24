@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -38,6 +39,26 @@ namespace Fastcull.Services
     public readonly record struct StoredPhotoState(CullState Cull, Rotation Rotation)
     {
         public static readonly StoredPhotoState Default = new(CullState.Default, Rotation.None);
+    }
+
+    /// <summary>
+    /// One session as the PRD 4.1 dropdown sees it, read from its database without opening a
+    /// writer against it.
+    /// </summary>
+    /// <param name="FolderExists">
+    /// False for a card that has been unplugged or a folder that was deleted. The dropdown still
+    /// lists it - the ratings are real and the folder may come back - but says so.
+    /// </param>
+    public readonly record struct SessionSummary(
+        string DatabasePath,
+        string RootFolder,
+        string? Name,
+        int PhotoCount,
+        DateTime LastOpenedUtc,
+        bool FolderExists)
+    {
+        /// <summary>The name if there is one, otherwise the folder's own name (PRD 4.1).</summary>
+        public string DisplayName => SessionStore.Describe(Name, RootFolder);
     }
 
     /// <summary>
@@ -88,7 +109,13 @@ namespace Fastcull.Services
         /// Opens the session database for a scan root. If a session for that same root already
         /// exists it is reused, so ratings survive a restart (PRD 3.1 / work order H.3).
         /// </summary>
-        public static async Task<SessionStore> OpenAsync(string rootFolder, string? sessionDirectory = null)
+        /// <param name="name">
+        /// PRD 4.1's optional session name. Null leaves whatever the session already had, so
+        /// reopening a named session by folder does not wipe its name; a non-empty value sets or
+        /// replaces it. Blank is treated as null - "skipped the prompt" is not a name.
+        /// </param>
+        public static async Task<SessionStore> OpenAsync(
+            string rootFolder, string? sessionDirectory = null, string? name = null)
         {
             sessionDirectory ??= DefaultSessionDirectory;
             Directory.CreateDirectory(sessionDirectory);
@@ -105,7 +132,162 @@ namespace Fastcull.Services
             await connection.OpenAsync().ConfigureAwait(false);
             await InitialiseSchemaAsync(connection, rootFolder).ConfigureAwait(false);
 
-            return new SessionStore(connection, databasePath, rootFolder);
+            if (!string.IsNullOrWhiteSpace(name))
+                await SetNameAsync(connection, name.Trim()).ConfigureAwait(false);
+
+            var store = new SessionStore(connection, databasePath, rootFolder)
+            {
+                Name = await ReadNameAsync(connection).ConfigureAwait(false),
+            };
+
+            return store;
+        }
+
+        /// <summary>
+        /// PRD 4.1's optional name, or null when the session was never named. Callers that need
+        /// something to display fall back to the folder name via <see cref="DisplayName"/>.
+        /// </summary>
+        public string? Name { get; private set; }
+
+        /// <summary>The name if there is one, otherwise the folder's own name (PRD 4.1's fallback).</summary>
+        public string DisplayName => Describe(Name, RootFolder);
+
+        /// <summary>
+        /// The single place the name-or-folder fallback is decided, so the dropdown, the sidebar
+        /// and the log cannot each answer it slightly differently.
+        /// </summary>
+        public static string Describe(string? name, string rootFolder)
+            => string.IsNullOrWhiteSpace(name) ? FolderNameOf(rootFolder) : name.Trim();
+
+        /// <summary>
+        /// The last path segment, tolerating a trailing separator - Path.GetFileName on
+        /// "E:\Photos\Canada\" returns empty string, which would show a blank session name.
+        /// </summary>
+        public static string FolderNameOf(string rootFolder)
+        {
+            if (string.IsNullOrWhiteSpace(rootFolder)) return string.Empty;
+
+            var trimmed = rootFolder.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var leaf = Path.GetFileName(trimmed);
+
+            // A drive root ("E:\") has no leaf at all; its own path is the best label available.
+            return string.IsNullOrEmpty(leaf) ? trimmed : leaf;
+        }
+
+        private static async Task SetNameAsync(SqliteConnection connection, string name)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "UPDATE session_meta SET name = $name;";
+            cmd.Parameters.AddWithValue("$name", name);
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        private static async Task<string?> ReadNameAsync(SqliteConnection connection)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = "SELECT name FROM session_meta LIMIT 1;";
+            var value = await cmd.ExecuteScalarAsync().ConfigureAwait(false);
+            return value as string;
+        }
+
+        /// <summary>Renames the open session (PRD 4.1). Blank clears the name back to the folder fallback.</summary>
+        public async Task RenameAsync(string? name)
+        {
+            var trimmed = string.IsNullOrWhiteSpace(name) ? null : name.Trim();
+
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = "UPDATE session_meta SET name = $name;";
+            cmd.Parameters.AddWithValue("$name", (object?)trimmed ?? DBNull.Value);
+            await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+
+            Name = trimmed;
+        }
+
+        /// <summary>
+        /// Every session on disk, newest first (PRD 4.1's dropdown).
+        ///
+        /// Read straight from the session databases rather than from a separate index, because a
+        /// separate index is a second source of truth that can disagree with them - and the thing
+        /// it would disagree about is which folder a set of ratings belongs to.
+        ///
+        /// Best-effort per file: a corrupt or foreign .db is skipped, never fatal.
+        /// </summary>
+        public static IReadOnlyList<SessionSummary> ListSessions(string? sessionDirectory = null)
+        {
+            sessionDirectory ??= DefaultSessionDirectory;
+
+            var sessions = new List<SessionSummary>();
+            if (!Directory.Exists(sessionDirectory)) return sessions;
+
+            foreach (var candidate in Directory.EnumerateFiles(sessionDirectory, "*.db"))
+            {
+                try
+                {
+                    using var probe = new SqliteConnection(new SqliteConnectionStringBuilder
+                    {
+                        DataSource = candidate,
+                        Mode = SqliteOpenMode.ReadOnly,
+                    }.ToString());
+                    probe.Open();
+
+                    using var cmd = probe.CreateCommand();
+
+                    // Older databases predate the name column, and asking for a column that does
+                    // not exist throws. The count of photos comes along because a dropdown entry
+                    // reading "Canada - 0 photos" is worth telling apart from a real session.
+                    var hasName = HasColumn(probe, "session_meta", "name");
+                    cmd.CommandText = hasName
+                        ? "SELECT root_path, name FROM session_meta LIMIT 1;"
+                        : "SELECT root_path, NULL FROM session_meta LIMIT 1;";
+
+                    string root;
+                    string? name;
+                    using (var reader = cmd.ExecuteReader())
+                    {
+                        if (!reader.Read()) continue;
+                        root = reader.GetString(0);
+                        name = reader.IsDBNull(1) ? null : reader.GetString(1);
+                    }
+
+                    using var countCmd = probe.CreateCommand();
+                    countCmd.CommandText = "SELECT COUNT(*) FROM photos;";
+                    var photoCount = Convert.ToInt32(countCmd.ExecuteScalar());
+
+                    sessions.Add(new SessionSummary(
+                        candidate,
+                        root,
+                        name,
+                        photoCount,
+                        File.GetLastWriteTimeUtc(candidate),
+                        SafeExists(root)));
+                }
+                catch (Exception)
+                {
+                    // A corrupt or foreign .db in the folder must never stop the list rendering.
+                }
+            }
+
+            return sessions.OrderByDescending(s => s.LastOpenedUtc).ToList();
+        }
+
+        /// <summary>Directory.Exists throws on some UNC paths rather than returning false.</summary>
+        private static bool SafeExists(string path)
+        {
+            try { return Directory.Exists(path); }
+            catch (Exception) { return false; }
+        }
+
+        private static bool HasColumn(SqliteConnection connection, string table, string column)
+        {
+            using var cmd = connection.CreateCommand();
+            cmd.CommandText = $"PRAGMA table_info({table});";
+
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+                if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+            return false;
         }
 
         private static string? FindSessionForRoot(string sessionDirectory, string rootFolder)
@@ -173,7 +355,7 @@ namespace Fastcull.Services
                 );
                 CREATE TABLE IF NOT EXISTS companions (photo_id INTEGER, path TEXT, kind TEXT);
                 CREATE INDEX IF NOT EXISTS idx_sort ON photos(sort_time, capture_subsec, path);
-                CREATE TABLE IF NOT EXISTS session_meta (root_path TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS session_meta (root_path TEXT NOT NULL, name TEXT);
                 """;
             await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
@@ -189,8 +371,8 @@ namespace Fastcull.Services
             }
         }
 
-        /// <summary>Schema revision. 1 added photos.rotation (PRD 1.11).</summary>
-        public const int SchemaVersion = 1;
+        /// <summary>Schema revision. 1 added photos.rotation (PRD 1.11); 2 added session_meta.name (PRD 4.1).</summary>
+        public const int SchemaVersion = 2;
 
         /// <summary>
         /// Brings an existing database up to <see cref="SchemaVersion"/>.
@@ -212,6 +394,16 @@ namespace Fastcull.Services
             {
                 using var alter = connection.CreateCommand();
                 alter.CommandText = "ALTER TABLE photos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0;";
+                await alter.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+            // PRD 4.1's optional session name. Nullable rather than defaulted to the folder name:
+            // "never named" and "named after the folder" are different facts, and only the first
+            // should follow the folder if it is ever renamed.
+            if (!await ColumnExistsAsync(connection, "session_meta", "name").ConfigureAwait(false))
+            {
+                using var alter = connection.CreateCommand();
+                alter.CommandText = "ALTER TABLE session_meta ADD COLUMN name TEXT;";
                 await alter.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 

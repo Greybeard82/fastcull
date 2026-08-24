@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
 using Fastcull.Models;
+using Fastcull.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 
@@ -18,9 +19,9 @@ namespace Fastcull.ViewModels
     /// state - what is shown, whether it is pinned - and mixing that into the class that owns the
     /// photo sequence and the cursor is how MainViewModel becomes a god object.
     ///
-    /// First pass. PRD 1.5 also lists a folder tree, a format breakdown and Finish Session; none
-    /// of those are here. Finish Session in particular is deliberately a disabled placeholder -
-    /// PRD 4.1's modal and the whole batch-export path do not exist in the codebase.
+    /// Also carries PRD 4.1's session controls - create, reopen, and the name shown where the
+    /// folder name used to be. A "session" is the folder-scoped session that already existed;
+    /// this adds a name and an explicit way in, it does not introduce a second concept.
     /// </summary>
     public partial class SidebarViewModel : ObservableObject
     {
@@ -66,7 +67,20 @@ namespace Fastcull.ViewModels
         /// hundred-file folder scans in about 200 ms, and revealing the panel for that long is a
         /// flash at startup rather than information.
         /// </summary>
-        public bool IsShown => IsPinned || IsHovered || IsScanRevealed;
+        public bool IsShown => IsPinned || IsHovered || IsScanRevealed || IsSessionPickerOpen;
+
+        /// <summary>
+        /// Holds the panel open while the session dropdown's popup is up (PRD 4.1).
+        ///
+        /// Without this the dropdown is unusable unless the sidebar happens to be pinned: the
+        /// popup is drawn outside the panel's bounds, so opening it moves the pointer out of
+        /// SidebarHost, the auto-hide collapses the panel, and the popup goes with it. Measured,
+        /// not theorised - the panel vanished the moment the list was clicked.
+        /// </summary>
+        [ObservableProperty]
+        [NotifyPropertyChangedFor(nameof(IsShown))]
+        [NotifyPropertyChangedFor(nameof(Visibility))]
+        private bool _isSessionPickerOpen;
 
         public Visibility Visibility => IsShown ? Visibility.Visible : Visibility.Collapsed;
 
@@ -108,6 +122,83 @@ namespace Fastcull.ViewModels
         public event Action? ChangeFolderRequested;
 
         public void RequestChangeFolder() => ChangeFolderRequested?.Invoke();
+
+        // ------------------------------------------------------------------
+        // Sessions (PRD 4.1)
+        // ------------------------------------------------------------------
+
+        /// <summary>Raised by CREATE NEW SESSION. The View owns the name prompt and the picker.</summary>
+        public event Action? CreateSessionRequested;
+
+        /// <summary>Raised when a prior session is chosen from the dropdown.</summary>
+        public event Action<SessionSummary>? ReopenSessionRequested;
+
+        /// <summary>Raised by FINISH SESSION (PRD 4.2).</summary>
+        public event Action? FinishSessionRequested;
+
+        public void RequestCreateSession() => CreateSessionRequested?.Invoke();
+        public void RequestFinishSession() => FinishSessionRequested?.Invoke();
+
+        /// <summary>
+        /// The session's name, or the folder's name when it was never named (PRD 4.1). Shown where
+        /// the folder name used to be, because that is where a user already looks to see which job
+        /// is open.
+        /// </summary>
+        [ObservableProperty]
+        private string _sessionName = string.Empty;
+
+        /// <summary>Prior sessions for the dropdown, newest first.</summary>
+        public ObservableCollection<SessionSummary> Sessions { get; } = new();
+
+        /// <summary>Which row the dropdown shows as current; -1 when nothing is open.</summary>
+        [ObservableProperty]
+        private int _selectedSessionIndex = -1;
+
+        /// <summary>The folder currently open, used to tell a real pick from an echo of our own.</summary>
+        private string? _currentRoot;
+
+        /// <summary>
+        /// Handles a pick from the dropdown.
+        ///
+        /// **Choosing the session that is already open does nothing**, and that guard is what makes
+        /// this safe rather than a flag would: the list is rebuilt after every open, which re-selects
+        /// the current row and raises SelectionChanged again. Comparing against the open folder is
+        /// true regardless of what order the control and the view-model update in, whereas a
+        /// "suppress" flag is only true if the ordering is what you assumed.
+        /// </summary>
+        public void SelectSession(int index)
+        {
+            if (index < 0 || index >= Sessions.Count) return;
+
+            var session = Sessions[index];
+            if (string.Equals(session.RootFolder, _currentRoot, StringComparison.OrdinalIgnoreCase)) return;
+
+            ReopenSessionRequested?.Invoke(session);
+        }
+
+        /// <summary>Refreshes the dropdown and marks the open session as its current row.</summary>
+        public void SetSessions(IEnumerable<SessionSummary> sessions, string? currentRoot)
+        {
+            _currentRoot = currentRoot;
+
+            Sessions.Clear();
+            foreach (var session in sessions) Sessions.Add(session);
+
+            SelectedSessionIndex = currentRoot is null
+                ? -1
+                : Sessions.Select((s, i) => (s, i))
+                          .Where(t => string.Equals(t.s.RootFolder, currentRoot, StringComparison.OrdinalIgnoreCase))
+                          .Select(t => t.i)
+                          .DefaultIfEmpty(-1)
+                          .First();
+        }
+
+        /// <summary>
+        /// Whether FINISH SESSION is available. False with nothing open - there would be nothing
+        /// to sort, and a live button over an empty stage is a trap.
+        /// </summary>
+        [ObservableProperty]
+        private bool _canFinishSession;
 
         public void SetFolder(string? root)
         {

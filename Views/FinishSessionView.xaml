@@ -1,0 +1,195 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Fastcull.Views.FinishSessionView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+    mc:Ignorable="d"
+    FontFamily="{StaticResource UiFontFamily}">
+
+    <UserControl.Resources>
+        <Style x:Key="FinishLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral400Brush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <!-- Right-aligned in a fixed column: WinUI TextBlock has no tabular figures, so pinning
+             the right edge is what keeps the counts from jittering their rows. -->
+        <Style x:Key="FinishValue" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinWidth" Value="46"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral200Brush}"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="HorizontalTextAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="FinishDest" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="MinWidth" Value="88"/>
+            <Setter Property="Margin" Value="18,0,0,0"/>
+            <Setter Property="Foreground" Value="{StaticResource Neutral700Brush}"/>
+            <Setter Property="HorizontalTextAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </UserControl.Resources>
+
+    <!-- PRD 4.2's confirmation. Unlike the help overlay this one IS modal: it is the last
+         checkpoint before files move, so the scrim is hit-testable and swallows every pointer
+         event heading for the stage underneath. A stray click must not rate a photo that the
+         summary behind this card has already counted.
+
+         PRD 1.10: the scrim is solid #FF000000, not a translucent dim. Every non-photograph
+         pixel is exactly black, which rules out letting the stage show through. -->
+    <Grid Background="#FF000000">
+        <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                Background="#FF000000"
+                BorderBrush="{StaticResource Neutral800Brush}" BorderThickness="1"
+                Padding="34,28,34,28" MinWidth="470">
+            <StackPanel Spacing="0">
+
+                <TextBlock Text="FINISH SESSION" FontSize="10" CharacterSpacing="180"
+                           Foreground="{StaticResource Neutral700Brush}"/>
+                <TextBlock x:Name="SessionTitle"
+                           Text="{x:Bind ViewModel.FinishSessionTitle, Mode=OneWay}"
+                           FontSize="17" CharacterSpacing="30" Margin="0,7,0,0"
+                           Foreground="{StaticResource Accent200Brush}"
+                           TextTrimming="CharacterEllipsis" MaxLines="1"/>
+
+                <!-- Stage 1 says so plainly. Somebody clicking Confirm must never be unsure
+                     whether their photographs just moved. -->
+                <Border Margin="0,16,0,0" Padding="10,7"
+                        BorderBrush="{StaticResource Neutral800Brush}" BorderThickness="1">
+                    <TextBlock TextWrapping="Wrap" FontSize="10" LineHeight="15"
+                               Foreground="{StaticResource Neutral500Brush}"
+                               Text="DRY RUN — stage 1. Confirm writes the full plan to a log file and moves nothing. No photo is copied, moved or deleted."/>
+                </Border>
+
+                <!-- ===================== Summary ===================== -->
+                <TextBlock Text="WHAT WILL HAPPEN" FontSize="9" CharacterSpacing="160"
+                           Margin="0,22,0,10"
+                           Foreground="{StaticResource Neutral700Brush}"/>
+
+                <Grid ColumnDefinitions="*,Auto,Auto" RowSpacing="6">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Approved" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{x:Bind ViewModel.FinishApprovedText, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="Approved" Style="{StaticResource FinishDest}"/>
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Rejected" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="1" Text="{x:Bind ViewModel.FinishRejectedText, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="Rejected" Style="{StaticResource FinishDest}"/>
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="★ 1" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="2" Grid.Column="1" Text="{x:Bind ViewModel.FinishStar1Text, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="Rated/1" Style="{StaticResource FinishDest}"/>
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="★ 2" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="3" Grid.Column="1" Text="{x:Bind ViewModel.FinishStar2Text, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="Rated/2" Style="{StaticResource FinishDest}"/>
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="★ 3" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="4" Grid.Column="1" Text="{x:Bind ViewModel.FinishStar3Text, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="4" Grid.Column="2" Text="Rated/3" Style="{StaticResource FinishDest}"/>
+
+                    <TextBlock Grid.Row="5" Grid.Column="0" Text="★ 4" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="5" Grid.Column="1" Text="{x:Bind ViewModel.FinishStar4Text, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="5" Grid.Column="2" Text="Rated/4" Style="{StaticResource FinishDest}"/>
+
+                    <TextBlock Grid.Row="6" Grid.Column="0" Text="★ 5" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="6" Grid.Column="1" Text="{x:Bind ViewModel.FinishStar5Text, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="6" Grid.Column="2" Text="Rated/5" Style="{StaticResource FinishDest}"/>
+
+                    <Border Grid.Row="7" Grid.ColumnSpan="3" Height="1" Margin="0,6,0,4"
+                            Background="{StaticResource Neutral900Brush}"/>
+
+                    <TextBlock Grid.Row="8" Grid.Column="0" Text="Unrated" Style="{StaticResource FinishLabel}"/>
+                    <TextBlock Grid.Row="8" Grid.Column="1" Text="{x:Bind ViewModel.FinishUnratedText, Mode=OneWay}" Style="{StaticResource FinishValue}"/>
+                    <TextBlock Grid.Row="8" Grid.Column="2" Text="stays put" Style="{StaticResource FinishDest}"/>
+                </Grid>
+
+                <!-- ===================== Move / Copy ===================== -->
+                <!-- PRD 4.2: no default. Neither starts selected and Confirm stays disabled until
+                     one is actively chosen. Move is destructive, Copy is not, and they are one
+                     click apart - a pre-selected default would be the app making that call. -->
+                <TextBlock Text="MOVE OR COPY — REQUIRED" FontSize="9" CharacterSpacing="160"
+                           Margin="0,24,0,10"
+                           Foreground="{StaticResource Neutral700Brush}"/>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10">
+                    <Button x:Name="CopyButton" Grid.Column="0" Click="Copy_Click" IsTabStop="False"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Padding="12,9" Background="Transparent"
+                            BorderBrush="{x:Bind ViewModel.CopyBorderBrush, Mode=OneWay}"
+                            BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="COPY" FontSize="10" CharacterSpacing="140"
+                                       Foreground="{x:Bind ViewModel.CopyTextBrush, Mode=OneWay}"/>
+                            <TextBlock Text="Originals stay" FontSize="9" Margin="0,3,0,0"
+                                       Foreground="{StaticResource Neutral700Brush}"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="MoveButton" Grid.Column="1" Click="Move_Click" IsTabStop="False"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Padding="12,9" Background="Transparent"
+                            BorderBrush="{x:Bind ViewModel.MoveBorderBrush, Mode=OneWay}"
+                            BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="MOVE" FontSize="10" CharacterSpacing="140"
+                                       Foreground="{x:Bind ViewModel.MoveTextBrush, Mode=OneWay}"/>
+                            <TextBlock Text="Originals relocate" FontSize="9" Margin="0,3,0,0"
+                                       Foreground="{StaticResource Neutral700Brush}"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+                <!-- ===================== Result ===================== -->
+                <Border Margin="0,18,0,0" Padding="10,8"
+                        BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1"
+                        Visibility="{x:Bind ViewModel.FinishResultVisibility, Mode=OneWay}">
+                    <TextBlock Text="{x:Bind ViewModel.FinishResult, Mode=OneWay}"
+                               TextWrapping="Wrap" FontSize="10" LineHeight="15"
+                               IsTextSelectionEnabled="True"
+                               Foreground="{StaticResource Neutral400Brush}"/>
+                </Border>
+
+                <!-- ===================== Actions ===================== -->
+                <Grid ColumnDefinitions="Auto,*,Auto" Margin="0,24,0,0">
+                    <Button Grid.Column="0" Click="Cancel_Click" IsTabStop="False"
+                            Padding="16,8" Background="Transparent"
+                            BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1">
+                        <TextBlock Text="CANCEL" FontSize="9" CharacterSpacing="140"
+                                   Foreground="{StaticResource Neutral500Brush}"/>
+                    </Button>
+
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" Margin="14,0"
+                               FontSize="9" TextWrapping="Wrap"
+                               Foreground="{StaticResource Neutral800Brush}"
+                               Text="Esc closes this without finishing."/>
+
+                    <Button x:Name="ConfirmButton" Grid.Column="2" Click="Confirm_Click" IsTabStop="False"
+                            IsEnabled="{x:Bind ViewModel.CanConfirmFinish, Mode=OneWay}"
+                            Padding="20,8" Background="Transparent"
+                            BorderBrush="{StaticResource AccentBrush}" BorderThickness="1">
+                        <TextBlock Text="CONFIRM" FontSize="9" CharacterSpacing="140"
+                                   Foreground="{StaticResource Accent200Brush}"/>
+                    </Button>
+                </Grid>
+            </StackPanel>
+        </Border>
+    </Grid>
+</UserControl>

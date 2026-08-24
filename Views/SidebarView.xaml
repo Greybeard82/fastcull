@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:Fastcull.ViewModels"
+    xmlns:svc="using:Fastcull.Services"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d"
@@ -73,11 +74,14 @@
                          panel already states which folder is open, so that is where a user looks
                          to change it. -->
                     <StackPanel Grid.Column="0" Spacing="3">
+                        <!-- The session's name, which is the folder's name until one is given
+                             (PRD 4.1). Still the change-folder control: this is where a user
+                             already looks to see, and change, which job is open. -->
                         <Button Click="ChangeFolder_Click" IsTabStop="False"
                                 HorizontalAlignment="Left" HorizontalContentAlignment="Left"
                                 Padding="0" Background="Transparent" BorderThickness="0"
                                 ToolTipService.ToolTip="Choose a different folder">
-                            <TextBlock Text="{x:Bind ViewModel.FolderName, Mode=OneWay}"
+                            <TextBlock Text="{x:Bind ViewModel.SessionName, Mode=OneWay}"
                                        FontSize="13" CharacterSpacing="40"
                                        Foreground="{StaticResource Accent200Brush}"
                                        TextTrimming="CharacterEllipsis" MaxLines="1"/>
@@ -94,6 +98,52 @@
                             <TextBlock Text="CHANGE FOLDER" FontSize="8" CharacterSpacing="140"
                                        Foreground="{StaticResource Neutral500Brush}"/>
                         </Button>
+
+                        <!-- ============ Sessions (PRD 4.1) ============
+                             Inside the header block rather than in a row of their own: these are
+                             identity controls, and they belong beside the name of the session they
+                             create and switch between. -->
+                        <TextBlock Text="SESSIONS" Style="{StaticResource SectionLabel}"
+                                   Margin="0,16,0,6"/>
+
+                        <Button Click="CreateSession_Click" IsTabStop="False"
+                                HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                Padding="8,3" Background="Transparent"
+                                BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1"
+                                ToolTipService.ToolTip="Name a new session, then choose its folder">
+                            <TextBlock Text="+  CREATE NEW SESSION" FontSize="8" CharacterSpacing="140"
+                                       Foreground="{StaticResource Accent200Brush}"/>
+                        </Button>
+
+                        <!-- SelectedIndex is OneWay: the view-model decides which row is current,
+                             and a pick is reported through SelectionChanged instead. Two-way
+                             binding a nullable struct through a ComboBox is a fight with no prize. -->
+                        <ComboBox x:Name="SessionDropdown"
+                                  Margin="0,6,0,0"
+                                  HorizontalAlignment="Stretch"
+                                  IsTabStop="False"
+                                  PlaceholderText="Reopen a session"
+                                  FontSize="11"
+                                  ItemsSource="{x:Bind ViewModel.Sessions, Mode=OneWay}"
+                                  SelectedIndex="{x:Bind ViewModel.SelectedSessionIndex, Mode=OneWay}"
+                                  SelectionChanged="SessionDropdown_SelectionChanged"
+                                  DropDownOpened="SessionDropdown_DropDownOpened"
+                                  DropDownClosed="SessionDropdown_DropDownClosed">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate x:DataType="svc:SessionSummary">
+                                    <StackPanel Margin="0,2,0,2">
+                                        <TextBlock Text="{x:Bind DisplayName}"
+                                                   FontSize="11"
+                                                   Foreground="{StaticResource Neutral200Brush}"
+                                                   TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                                        <TextBlock Text="{x:Bind RootFolder}"
+                                                   FontSize="8"
+                                                   Foreground="{StaticResource Neutral700Brush}"
+                                                   TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
                     </StackPanel>
 
                     <!-- IsTabStop=False: keyboard focus belongs to the cull, never to chrome.
@@ -387,20 +437,21 @@
                     </ItemsRepeater>
                 </StackPanel>
 
-                <!-- ================= Finish Session placeholder =================
-                     Disabled on purpose. PRD 4.1's modal and the entire batch copy/move path do
-                     not exist in the codebase; a button that looked live would be a lie.
+                <!-- ================= Finish Session (PRD 4.2) =================
+                     Live since 2026-08-24. Disabled only when nothing is loaded, since there
+                     would be nothing to sort.
 
                      The tooltip sits on the wrapping Grid, not on the Button: a disabled control
                      receives no pointer input in WinUI, so a tooltip set on the Button itself
-                     would never appear. -->
-                <Grid Grid.Row="6" ToolTipService.ToolTip="Coming soon — batch export is not built yet">
-                    <Button IsEnabled="False"
+                     would never appear while it is disabled. -->
+                <Grid Grid.Row="6" ToolTipService.ToolTip="Review and sort this session's photos">
+                    <Button Click="FinishSession_Click" IsTabStop="False"
+                            IsEnabled="{x:Bind ViewModel.CanFinishSession, Mode=OneWay}"
                             HorizontalAlignment="Stretch" Height="30"
                             Background="Transparent"
                             BorderBrush="{StaticResource Neutral900Brush}" BorderThickness="1">
                         <TextBlock Text="FINISH SESSION" FontSize="9" CharacterSpacing="140"
-                                   Foreground="{StaticResource Neutral800Brush}"/>
+                                   Foreground="{StaticResource Accent200Brush}"/>
                     </Button>
                 </Grid>
             </Grid>

@@ -1,0 +1,225 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using Fastcull.Models;
+
+namespace Fastcull.Services
+{
+    /// <summary>Which pile a photo lands in (PRD 4.3).</summary>
+    public enum FinishBucket
+    {
+        /// <summary>Unflagged - stays exactly where it is.</summary>
+        Untouched,
+        Approved,
+        Rejected,
+        Rated,
+    }
+
+    /// <summary>Whether the batch moves files or leaves the originals in place (PRD 4.2).</summary>
+    public enum FinishOperation
+    {
+        /// <summary>Nothing chosen yet. Confirm stays disabled while the choice is this.</summary>
+        None,
+        Copy,
+        Move,
+    }
+
+    /// <summary>One photo's fate.</summary>
+    /// <param name="SourcePath">Absolute path today.</param>
+    /// <param name="RelativePath">Path relative to the scan root, preserved inside the bucket.</param>
+    /// <param name="Bucket">Which pile.</param>
+    /// <param name="Stars">1-5 for <see cref="FinishBucket.Rated"/>, otherwise 0.</param>
+    /// <param name="DestinationPath">Absolute destination, or null when untouched.</param>
+    public readonly record struct FinishPlanEntry(
+        string SourcePath,
+        string RelativePath,
+        FinishBucket Bucket,
+        int Stars,
+        string? DestinationPath);
+
+    /// <summary>
+    /// What a Finish Session would do, computed but not performed.
+    /// </summary>
+    public sealed class FinishPlan
+    {
+        public required string SourceRoot { get; init; }
+        public required FinishOperation Operation { get; init; }
+        public required IReadOnlyList<FinishPlanEntry> Entries { get; init; }
+
+        /// <summary>Everything that would actually be written somewhere - untouched excluded.</summary>
+        public IEnumerable<FinishPlanEntry> Moves => Entries.Where(e => e.Bucket != FinishBucket.Untouched);
+
+        public int Total => Entries.Count;
+        public int ApprovedCount => Entries.Count(e => e.Bucket == FinishBucket.Approved);
+        public int RejectedCount => Entries.Count(e => e.Bucket == FinishBucket.Rejected);
+        public int UntouchedCount => Entries.Count(e => e.Bucket == FinishBucket.Untouched);
+        public int StarCount(int stars) => Entries.Count(e => e.Bucket == FinishBucket.Rated && e.Stars == stars);
+
+        /// <summary>How many files the operation would actually touch.</summary>
+        public int AffectedCount => Total - UntouchedCount;
+    }
+
+    /// <summary>
+    /// Turns cull states into destinations, per PRD 4.3.
+    ///
+    /// Pure, WinUI-free and in Core so the bucketing can be tested headlessly - which matters more
+    /// here than almost anywhere else in the app, because the thing being decided is where
+    /// somebody's photographs end up. Stage 1 only plans; nothing in this file opens, creates,
+    /// copies, moves or deletes a file.
+    /// </summary>
+    public static class FinishPlanner
+    {
+        public const string ApprovedFolder = "Approved";
+        public const string RejectedFolder = "Rejected";
+        public const string RatedFolder = "Rated";
+
+        /// <summary>
+        /// Which pile a state belongs to.
+        ///
+        /// **Stars are tested before the flag, and that order is the rule** (PRD 4.3). Section 1.6's
+        /// ladder makes every starred photo Picked as well, so a flag-first test would route all of
+        /// them to Approved and leave the star folders permanently empty. A 3-star photo belongs in
+        /// Rated/3 and nowhere else.
+        /// </summary>
+        public static FinishBucket BucketFor(CullState state) => state switch
+        {
+            { Stars: >= 1 } => FinishBucket.Rated,
+            { Flag: Flag.Rejected } => FinishBucket.Rejected,
+            { Flag: Flag.Picked } => FinishBucket.Approved,
+            _ => FinishBucket.Untouched,
+        };
+
+        /// <summary>
+        /// The bucket's folder relative to the scan root, or null for untouched.
+        /// </summary>
+        public static string? BucketFolder(FinishBucket bucket, int stars) => bucket switch
+        {
+            FinishBucket.Approved => ApprovedFolder,
+            FinishBucket.Rejected => RejectedFolder,
+            FinishBucket.Rated => Path.Combine(RatedFolder, stars.ToString()),
+            _ => null,
+        };
+
+        /// <summary>
+        /// Builds the plan. <paramref name="photos"/> supplies each photo's absolute path, its path
+        /// relative to the scan root, and its cull state.
+        ///
+        /// The relative path is preserved inside the bucket, per PRD 4.4's collision policy: two
+        /// cards can both hold DSC_0001.ARW, and flattening them into one folder would have one
+        /// silently overwrite the other.
+        /// </summary>
+        public static FinishPlan Plan(
+            string sourceRoot,
+            FinishOperation operation,
+            IEnumerable<(string AbsolutePath, string RelativePath, CullState State)> photos)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(sourceRoot);
+            ArgumentNullException.ThrowIfNull(photos);
+
+            var entries = new List<FinishPlanEntry>();
+
+            foreach (var (absolute, relative, state) in photos)
+            {
+                var bucket = BucketFor(state);
+                var stars = bucket == FinishBucket.Rated ? state.Stars : 0;
+                var folder = BucketFolder(bucket, stars);
+
+                entries.Add(new FinishPlanEntry(
+                    absolute,
+                    relative,
+                    bucket,
+                    stars,
+                    folder is null ? null : Path.Combine(sourceRoot, folder, relative)));
+            }
+
+            return new FinishPlan
+            {
+                SourceRoot = sourceRoot,
+                Operation = operation,
+                Entries = entries,
+            };
+        }
+
+        /// <summary>
+        /// Renders the plan as the dry-run log of PRD 4.2.1: a header, a per-bucket tally, then
+        /// every file with the destination it would have been given.
+        ///
+        /// Untouched photos are listed too, marked as such. Leaving them out would make the log
+        /// unable to answer "why was this one not sorted?", which is exactly the question a dry run
+        /// exists to answer.
+        /// </summary>
+        public static string Render(FinishPlan plan, DateTimeOffset timestamp)
+        {
+            ArgumentNullException.ThrowIfNull(plan);
+
+            var sb = new StringBuilder();
+
+            sb.AppendLine("FastCull - Finish Session PLAN (dry run, PRD 4.2.1)");
+            sb.AppendLine("NO FILES WERE MOVED OR COPIED. This is stage 1: planning only.");
+            sb.AppendLine();
+            sb.AppendLine($"Generated   : {timestamp:yyyy-MM-dd HH:mm:ss zzz}");
+            sb.AppendLine($"Source root : {plan.SourceRoot}");
+            sb.AppendLine($"Operation   : {plan.Operation.ToString().ToUpperInvariant()}");
+            sb.AppendLine();
+
+            sb.AppendLine("SUMMARY");
+            sb.AppendLine($"  Total photos     {plan.Total,6}");
+            sb.AppendLine($"  Approved         {plan.ApprovedCount,6}   -> {ApprovedFolder}");
+            sb.AppendLine($"  Rejected         {plan.RejectedCount,6}   -> {RejectedFolder}");
+
+            for (var stars = 1; stars <= 5; stars++)
+                sb.AppendLine($"  {stars} star{(stars == 1 ? " " : "s")}          {plan.StarCount(stars),6}   -> {Path.Combine(RatedFolder, stars.ToString())}");
+
+            sb.AppendLine($"  Unrated          {plan.UntouchedCount,6}   -> (untouched, stays in place)");
+            sb.AppendLine();
+            sb.AppendLine($"  Files affected   {plan.AffectedCount,6}");
+            sb.AppendLine();
+
+            sb.AppendLine("PLAN");
+            foreach (var entry in plan.Entries.OrderBy(e => e.Bucket).ThenBy(e => e.Stars).ThenBy(e => e.RelativePath, StringComparer.OrdinalIgnoreCase))
+            {
+                sb.AppendLine(entry.Bucket == FinishBucket.Untouched
+                    ? $"  [UNTOUCHED] {entry.RelativePath}"
+                    : $"  [{Label(entry),-11}] {entry.RelativePath}  ->  {entry.DestinationPath}");
+            }
+
+            return sb.ToString();
+        }
+
+        private static string Label(FinishPlanEntry entry) => entry.Bucket switch
+        {
+            FinishBucket.Rated => $"RATED {entry.Stars}",
+            FinishBucket.Approved => "APPROVED",
+            FinishBucket.Rejected => "REJECTED",
+            _ => "UNTOUCHED",
+        };
+
+        /// <summary>Where dry-run logs go (PRD 4.4 already names this directory).</summary>
+        public static string LogDirectory => Path.Combine(AppSettings.RootDirectory, "logs");
+
+        /// <summary>
+        /// Writes the rendered plan and returns its path, or null if it could not be written.
+        ///
+        /// Never throws: a log that cannot be written must not look like a failed Finish Session.
+        /// Call this off the UI thread - it is the only file I/O in the flow, and CLAUDE.md's
+        /// constraint has no exception for "only a small write".
+        /// </summary>
+        public static string? WriteLog(FinishPlan plan, DateTimeOffset timestamp)
+        {
+            try
+            {
+                Directory.CreateDirectory(LogDirectory);
+
+                var path = Path.Combine(LogDirectory, $"finish-plan-{timestamp:yyyyMMdd-HHmmss}.log");
+                File.WriteAllText(path, Render(plan, timestamp));
+                return path;
+            }
+            catch (Exception)
+            {
+                return null;
+            }
+        }
+    }
+}

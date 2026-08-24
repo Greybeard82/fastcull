@@ -23,7 +23,7 @@ Three rules that govern every subsystem:
 ### 0.1 Non-Goals (v1.0)
 - No image editing, develop settings, or format conversion.
 - No catalog or persistent library beyond crash recovery of the current session.
-- No XMP sidecar writing (deferred, see 4.4).
+- No XMP sidecar writing (deferred, see 4.5).
 - No video files. Not `.MP4`, not `.MOV`, not animated `.GIF`. A culling tool that has to decode video frames is a different application.
 - No cloud, telemetry, or auto-update.
 - No macOS or Linux.
@@ -786,30 +786,86 @@ Benchmarks run against three fixture sets: all-RAW, all-JPEG, and mixed. The mix
 
 ## 4. Output and Batch Processing
 
-### 4.1 Finish Session Modal
-Triggered from the sidebar. Displays:
-- **X approved** (`Picked` plus anything with stars)
-- **Y rejected** (`Rejected`)
-- **Z unrated** (untouched, remain in source folders)
-- Star histogram, 1 through 5
-- Total bytes to move or copy, and free space on the target volume
+### 4.1 Sessions: create, name, reopen
 
-User selects **Copy** or **Move** and a target directory.
+**A session is the folder-scoped session that already exists, given a name and an explicit UI.** §3.1's `SessionStore` already opens one SQLite database per scan root, already finds the existing database for a root instead of making a second one, and already auto-resumes the last folder on launch (§1.1.1). None of that changes. What is added is an optional **name**, and controls to create and reopen sessions deliberately rather than only by picking a folder.
 
-### 4.2 Destination Structure
+This is a reconciliation, not a parallel system. There is exactly one session per folder, exactly one database per session, and the name is stored in that database's `session_meta` — not in a separate registry that could disagree with it.
+
+**The sidebar's top gains two controls:**
+
+| Control | Behaviour |
+| :--- | :--- |
+| **Create New Session** | Prompts for an optional name, then opens the folder picker |
+| **Session dropdown** | Lists prior sessions, newest first; choosing one reopens that folder |
+
+**Naming is offered and skippable.** The prompt is presented with an empty field and a skip path; leaving it blank falls back to **the folder's own name**, which is what the sidebar showed before names existed. A name is a label for a job — "Wedding, second shooter" — not an identifier: the folder path remains the identity, so two sessions can carry the same name without colliding and renaming one never orphans its ratings.
+
+**Auto-resume is unchanged.** Launch still reopens the most recent folder with no interaction, exactly as §1.1.1 specifies. The dropdown is an *additional* way in, for the case auto-resume cannot serve — going back to a job from three cards ago.
+
+**Reopening shows only photos still physically present.** The scan enumerates the folder as it always has, and stored ratings are matched to it by path; a photo that a previous Finish Session moved out is simply not found, so it is not in the reopened session. Ratings for absent photos stay in the database and are ignored.
+
+This is deliberately the simple model. A reopened session is "what is still here", not a reconstruction of what the folder used to hold — so a second **Finish Session** sorts only the photos decided since the first one, which is the behaviour wanted anyway. Nothing tracks where a moved photo went; the destination layout in §4.3 is regular enough to find it by hand, and building a move-ledger to support un-sorting is out of scope.
+
+### 4.2 The Finish Session confirmation
+
+Triggered from the sidebar button, which is **live** (it was a disabled "coming soon" placeholder until 2026-08-24). The name stays **Finish Session** — not "End Session"; the session is being completed, not abandoned.
+
+It opens a confirmation screen, and unlike §2.1.3's help overlay this one **is modal**: it is the last checkpoint before files move, so nothing behind it should be reachable while a choice is pending, and a stray keypress must not rate a photo the summary has already counted.
+
+**It shows what will happen, per bucket:**
+
+| Row | Which photos |
+| :--- | :--- |
+| **Approved** | `Picked` with **exactly 0 stars** |
+| **Rejected** | `Rejected` |
+| **★1 … ★5** | One row per star count |
+| **Unrated** | `Unflagged` — counted, then **left where they are** |
+
+Note that **Approved is not "picked plus anything starred"**, which is what an earlier draft of this section said. A starred photo is counted in its star row and nowhere else, matching §4.3's precedence exactly — so the rows on the confirmation sum to the total and describe the destinations honestly.
+
+**Move or Copy is a forced choice with no default.** Neither option starts selected, and the **Confirm** button stays disabled until one is actively chosen. This is deliberate friction: Move is destructive and Copy is not, they are one click apart, and a pre-selected default is a decision the app would be making on the user's behalf at exactly the moment it should not.
+
+**Escape closes the confirmation** without finishing anything, joining §2.1.1's dismiss order ahead of the help overlay.
+
+#### 4.2.1 Stage 1 — plan only, no file operations
+
+The first implementation builds the whole flow and, on **Confirm**, **writes the plan it would execute to a log and moves nothing**. Every photo is enumerated, its destination computed by §4.3's rules, and the result written to `%LOCALAPPDATA%\FastCull\logs\finish-plan-{timestamp}.log`.
+
+This exists so the bucketing can be checked against real folders before any code is capable of touching a photograph. The confirmation screen says plainly that this is a dry run, so the state is never ambiguous to the person clicking Confirm.
+
+### 4.3 Destination structure and bucketing
+
+Destinations are **relative to the scan root**, not to a separately chosen target directory:
+
 ```
-/Picked      (flag = Picked, stars = 0)
-/Rejected
-/1_Star
-/2_Star
-/3_Star
-/4_Star
-/5_Star
+{sourceRoot}/Approved      flag = Picked, stars = 0
+{sourceRoot}/Rejected      flag = Rejected
+{sourceRoot}/Rated/1       stars = 1
+{sourceRoot}/Rated/2       stars = 2
+{sourceRoot}/Rated/3       stars = 3
+{sourceRoot}/Rated/4       stars = 4
+{sourceRoot}/Rated/5       stars = 5
 ```
 
-An image with stars goes into its star folder only, not also into `/Picked`. Unrated files are never touched.
+Sorting in place under the source root, rather than into a target the user picks, is what makes a second Finish Session on a reopened session (§4.1) coherent: the already-sorted photos are inside the same tree, out of the scan's way, and the folder remains one self-contained job.
 
-### 4.3 File Operation Rules
+**Precedence — stars win over Approved:**
+
+| Test, in order | Destination |
+| :--- | :--- |
+| 1. `Stars >= 1` | `/Rated/{stars}` |
+| 2. `Flag == Rejected` | `/Rejected` |
+| 3. `Flag == Picked` | `/Approved` |
+| 4. otherwise (`Unflagged`) | **untouched** |
+
+**A 3-star photo goes to `/Rated/3` and nowhere else** — never also to `/Approved`. `/Approved` holds *only* picked-but-unstarred photos. Testing stars first is what enforces this: because §1.6's ladder makes any photo with stars also `Picked`, a flag-first test would send every starred photo to `/Approved` and the star folders would be empty.
+
+`Rejected` with stars cannot occur — §1.6's invariants make the pair unrepresentable — so rule 2 can never contradict rule 1.
+
+**Unrated photos are never touched**, not even to be counted into a folder. They stay exactly where they are so the next session finds them.
+
+### 4.4 File Operation Rules
 - **Companion files always travel with their item.** The group moves or nothing moves. In Paired mode this means a RAW+JPEG pair lands together in one bucket.
 - **Collision policy:** two cards can both contain `DSC_0001.ARW`. The relative path from the scan root is preserved inside the destination bucket, so `CardA/DSC_0001.ARW` becomes `/Picked/CardA/DSC_0001.ARW`. Nothing is ever silently overwritten.
 - **Same-basename, different-extension collisions** (`shot.jpg` and `shot.png` from different folders) are covered by the same relative-path rule.
@@ -818,7 +874,7 @@ An image with stars goes into its star folder only, not also into `/Picked`. Unr
 - **Partial failure leaves sources intact** and reports affected files. The app never ends up in a state where photos exist in neither place.
 - Free disk space is checked before the operation starts, not discovered halfway through.
 
-### 4.4 XMP Sidecars (deferred, not cancelled)
+### 4.5 XMP Sidecars (deferred, not cancelled)
 Writing `xmp:Rating` and `xmp:Label` sidecars in place would let Lightroom Classic read ratings without moving a single byte. Out of scope for v1.0 by decision. `XmpWriter` exists as a stubbed interface so adding it later is an afternoon rather than a refactor.
 
 ---

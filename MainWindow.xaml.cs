@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices.WindowsRuntime;
+using System.Threading.Tasks;
+using Fastcull.Services;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
@@ -40,8 +42,10 @@ namespace Fastcull
             ReserveCaptionButtonSpace();
 
             Filmstrip.ViewModel.PropertyChanged += ViewModel_PropertyChanged;
+            FinishOverlay.Bind(Filmstrip.ViewModel);
 
             InitializeSidebar();
+            InitializeSessions();
         }
 
         // ------------------------------------------------------------------
@@ -57,6 +61,132 @@ namespace Fastcull
 
             SidebarViewModel.PropertyChanged += Sidebar_PropertyChanged;
             ApplySidebarLayout();
+        }
+
+        // ------------------------------------------------------------------
+        // Sessions (PRD 4.1 / 4.2)
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Wires the session controls. They live here rather than in SidebarView for the same
+        /// reason the change-folder request does: both the name prompt and the folder picker need
+        /// a window, and the sidebar is a UserControl that does not have one.
+        /// </summary>
+        private void InitializeSessions()
+        {
+            SidebarViewModel.CreateSessionRequested += OnCreateSessionRequested;
+            SidebarViewModel.ReopenSessionRequested += OnReopenSessionRequested;
+            SidebarViewModel.FinishSessionRequested += () => Filmstrip.ViewModel.BeginFinish();
+
+            // Populate the dropdown at startup, so a prior session can be reopened even when the
+            // remembered folder is gone and the app came up on the empty state.
+            Filmstrip.ViewModel.RefreshSessions();
+        }
+
+        /// <summary>
+        /// PRD 4.1: prompt for an optional name, then the folder picker. In that order - naming
+        /// the job before choosing the card matches how the decision is actually made, and a name
+        /// prompt that appeared afterwards would read as a rename of something already open.
+        /// </summary>
+        private async void OnCreateSessionRequested()
+        {
+            var (proceed, name) = await PromptForSessionNameAsync();
+            if (!proceed) return;
+
+            var folder = await Services.FolderPickerService.PickFolderAsync(this);
+            if (string.IsNullOrWhiteSpace(folder)) return;
+
+            await Filmstrip.ViewModel.OpenFolderAsync(folder, name);
+        }
+
+        private async void OnReopenSessionRequested(SessionSummary session)
+        {
+            if (!session.FolderExists)
+            {
+                await ShowMessageAsync(
+                    "Folder not available",
+                    $"{session.RootFolder}\n\nThe ratings for this session are safe, but the folder cannot be reached right now. Reconnect the drive and try again.");
+                return;
+            }
+
+            // No name passed: reopening must never overwrite the name the session already has.
+            await Filmstrip.ViewModel.OpenFolderAsync(session.RootFolder);
+        }
+
+        /// <summary>
+        /// The optional-name prompt. Returns whether to continue, and the name - empty meaning
+        /// "skipped", which the caller passes through as null so the folder name is used.
+        ///
+        /// Two buttons rather than three: Continue takes whatever is in the box including nothing,
+        /// so skipping is just not typing. A separate "Skip" button would imply that continuing
+        /// with an empty field does something different, which it does not.
+        /// </summary>
+        private async Task<(bool Proceed, string? Name)> PromptForSessionNameAsync()
+        {
+            var input = new TextBox
+            {
+                PlaceholderText = "Optional name",
+                Background = new SolidColorBrush(Colors.Black),
+                Foreground = new SolidColorBrush(Colors.White),
+                MaxLength = 80,
+            };
+
+            var hint = new TextBlock
+            {
+                Text = "Leave blank to use the folder's own name.",
+                FontSize = 11,
+                Margin = new Thickness(0, 10, 0, 0),
+                Foreground = (Brush)Application.Current.Resources["Neutral700Brush"],
+                TextWrapping = TextWrapping.Wrap,
+            };
+
+            var panel = new StackPanel { Width = 320 };
+            panel.Children.Add(input);
+            panel.Children.Add(hint);
+
+            var dialog = new ContentDialog
+            {
+                Title = "New session",
+                Content = panel,
+                PrimaryButtonText = "Choose folder",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary,
+
+                // A ContentDialog in WinUI 3 has no ambient window, so it must be told which XAML
+                // tree it belongs to or it throws when shown.
+                XamlRoot = Content.XamlRoot,
+                RequestedTheme = ElementTheme.Dark,
+            };
+
+            // Captured as it is typed rather than read once after the dialog closes.
+            //
+            // Reading input.Text afterwards looked obviously correct and was measurably wrong: the
+            // box showed "Iceland Trip" in a screenshot while Text came back empty, and the
+            // session was created with the folder-name fallback every time. The dialog tears its
+            // content down as it closes, and whatever the box has not committed by then is gone.
+            // Watching TextChanged does not depend on that timing at all.
+            var typed = string.Empty;
+            input.TextChanged += (_, _) => typed = input.Text;
+
+            var result = await dialog.ShowAsync();
+            if (result != ContentDialogResult.Primary) return (false, null);
+
+            var name = (string.IsNullOrWhiteSpace(input.Text) ? typed : input.Text)?.Trim();
+            return (true, string.IsNullOrWhiteSpace(name) ? null : name);
+        }
+
+        private async Task ShowMessageAsync(string title, string message)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = title,
+                Content = new TextBlock { Text = message, TextWrapping = TextWrapping.Wrap },
+                CloseButtonText = "OK",
+                XamlRoot = Content.XamlRoot,
+                RequestedTheme = ElementTheme.Dark,
+            };
+
+            await dialog.ShowAsync();
         }
 
         private void Sidebar_PropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
@@ -109,6 +239,10 @@ namespace Fastcull
 
                 case nameof(ViewModels.MainViewModel.IsHelpVisible):
                     HelpOverlay.Visibility = vm.IsHelpVisible ? Visibility.Visible : Visibility.Collapsed;
+                    break;
+
+                case nameof(ViewModels.MainViewModel.IsFinishVisible):
+                    FinishOverlay.Visibility = vm.IsFinishVisible ? Visibility.Visible : Visibility.Collapsed;
                     break;
             }
         }
@@ -381,9 +515,49 @@ namespace Fastcull
                 .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(down);
         }
 
+        /// <summary>
+        /// Whether a control that wants raw keystrokes currently has focus.
+        ///
+        /// **This guard is load-bearing, and its absence was a real bug.** PreviewKeyDown tunnels
+        /// from the root downward and this handler marks every mapped key Handled, so without it a
+        /// focused TextBox never receives a single character - the keys are consumed by the cull
+        /// before the box sees them. Typing "Iceland Trip" into the session-name prompt instead
+        /// fired I (info overlay), C (set Picked), A and D (navigate), R and T (jump to ends) and
+        /// Space (toggle zoom), which rated photos, moved the cursor and dismissed the dialog.
+        ///
+        /// The ComboBox case is narrower on purpose: it is guarded only while its dropdown is
+        /// open. Guarding it whenever it merely has focus would mean that clicking the session
+        /// picker once left every subsequent keystroke dead, and the cull would silently stop
+        /// responding until the user clicked elsewhere.
+        /// </summary>
+        private bool IsTextEntryFocused()
+        {
+            var focused = FocusManager.GetFocusedElement(Content.XamlRoot);
+
+            return focused switch
+            {
+                TextBox or PasswordBox or RichEditBox or AutoSuggestBox => true,
+                ComboBox combo => combo.IsDropDownOpen,
+                _ => false,
+            };
+        }
+
         private void RootGrid_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
+            // Let the focused control have the keystroke. Nothing is marked Handled here, so the
+            // TextBox receives it exactly as it would in any other app.
+            if (IsTextEntryFocused()) return;
+
             var resolved = InputRouter.Resolve(e.Key, e.KeyStatus.IsExtendedKey, IsShiftDown());
+
+            // The finish confirmation is modal (PRD 4.2), so the cull is unreachable while it is
+            // up. Escape still works - a modal with no way out is a trap - and it is routed
+            // through the same dismiss chain as everywhere else.
+            if (Filmstrip.ViewModel.IsFinishVisible && resolved.Command != AppCommand.ExitZoom)
+            {
+                e.Handled = true;
+                return;
+            }
 
             if (resolved.Command == AppCommand.None)
             {
