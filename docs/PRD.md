@@ -73,17 +73,27 @@ Switching is **non-destructive to the folder being left**. Its ratings are alrea
 - **The scan parses metadata headers only.** No pixel data is touched during the scan. Parsing is parallelised across `coreCount - 2` workers.
 - **The filmstrip becomes interactive before the scan finishes.** Results stream into the sequence as they are found; the first image is on screen while the tail of the folder is still being enumerated. A progress pill in the sidebar shows `N files found` until the scan completes, then the final sort is applied.
 
-**Build status, 2026-08-24 — partially built, and the gap is not where it looks.**
+**Build status, 2026-08-25 — built.** The first photo is on screen while the tail of the folder is still being enumerated, and the app is interactive throughout.
 
-- **The scanner already streams.** `DirectoryScanner.ScanAsync` is an `IAsyncEnumerable<ScannedPhoto>` over a `System.Threading.Channels` channel, fed by `Parallel.ForEachAsync` across `coreCount - 2` workers. It yields each file as it is parsed. Nothing about the scanner needs changing.
-- **The consumer does not.** `MainViewModel.LoadAsync` drains that stream into a `List<ScannedPhoto>` before it builds a single view-model, so **the UI is not yet interactive during the scan** despite the underlying stream supporting it. The divergence from this section is one method, not the pipeline.
-- **The progress pill is built and is driven by real progress** — the count comes from the scanner as it yields, not from a timer or an estimate. It is gated so the sidebar auto-reveals only once a scan has run past **400 ms**; below that the reveal is a flash at startup rather than information. Measured: a 2,000-file folder crosses the threshold and shows the pill (observed at "1,957 files found"); a 100-file folder does not.
+Measured on a 5,458-photo library on an external USB drive, cold: the first photo appears in about a second, the sequence grows in batches for the 57 seconds the scan takes, and **the window is never once unresponsive** — zero UI stalls over 250 ms across the whole load. The same load previously ran the entire scan on the UI thread.
 
-**Deferred, deliberately: first image on screen during active scanning.** This is a sequence-identity change rather than a UI change, and three things would need rework together:
+**How the three deferred problems were solved.**
 
-1. **`FilmstripItemViewModel.Index` is immutable**, assigned at construction. It is also `ICacheableItem.Index`, which drives `PrefetchRange.Contains()` and the furthest-from-cursor eviction sort in §3.3. Inserting a photo mid-sequence invalidates every later index.
-2. **§1.3 sorts by capture time; files arrive in filesystem order.** So either append-then-sort — the filmstrip visibly reshuffles under the cursor mid-cull, which is worse than waiting — or sorted insert, which needs a mutable `Index` and an O(n) reindex per insert.
-3. **`SessionStore.RegisterPhotosAsync` takes the complete sorted list in one pass**, as does the rating restore. Streaming means either per-photo writes or ratings popping in visibly late.
+1. **`Index` was already mutable.** The constraint recorded here was stale: PRD 2.1.2's delete and PRD 1.9's undo had made `Index` settable and owned by `MainViewModel`, with the reindex loop those features needed. Streaming reuses it, reindexing only from the first disturbed position — so an appending batch, which is the overwhelming majority, touches only what it added.
+
+2. **Sorted insert, never append-then-sort.** Each arrival goes to its correct position by the same `(SortTime, CaptureSubsec, FilePath)` comparison the whole-list sort used, so the sequence is correct after every batch rather than only at the end. Verified on the real 5,458-photo library: `outOfOrder=0, indexDrift=0`.
+
+   **The cursor keeps its photo, not its number.** An insert at or before the active index nudges the index to follow the item it was already on, so a photograph never slides out from under someone mid-keystroke — which is the failure this whole design exists to prevent. Until the user first navigates or rates, the cursor instead follows position 0, so whoever waits for the load still lands on the chronologically first photo exactly as before. Rating claims the cursor as firmly as navigating does: without that, rating the first photo and then having an earlier one stream in would point the next keystroke at a different photograph.
+
+3. **Registration precedes display, and ratings are read once up front.** A rating is written as `UPDATE photos ... WHERE path = $path`, which silently matches **zero rows** when the photo has no row yet — so a photo visible before it is registered is a photo the user can rate into nothing. Each batch is therefore registered before its items reach the screen. Stored ratings are loaded once before the scan starts and applied as each view-model is constructed, so nothing pops in late.
+
+**The consumer runs on a worker, and that is a correctness fix as much as a streaming one.** The old `await foreach` in `MainViewModel` looked like it yielded per photo and did not: with an unbounded channel and a producer running ahead, every `MoveNextAsync` completes synchronously, `await` never suspends, and the loop runs to exhaustion in one block — no paint, no input, and no `AppWindow.Closing`, so the close button does nothing and Task Manager is the only way out. `ScanConsumerYieldTests` pins both regimes: 5,000 buffered items are consumed with **at most one** yield, while a starved consumer yields for nearly every item. Which regime a given load lands in depends on how fast the disk feeds the producer, which is why the resulting hang was intermittent.
+
+**Batching.** Photos accumulate on the worker and cross to the UI thread in batches of 128 — about fifty dispatcher hops for a 5,000-file folder rather than five thousand. The first photo crosses on its own so something is on screen immediately. Each hop is awaited, so a fast scan cannot queue merges faster than the dispatcher drains them.
+
+**Cancellation.** Each load owns a `CancellationTokenSource`, cancelled when another folder opens. This did not exist before and did not need to: the whole scan completed before anything else could run. Now that two scans can overlap, without it they would interleave two folders' photos into one sequence.
+
+**The progress pill** is unchanged and still driven by real progress, gated to reveal only once a scan passes **400 ms** so it does not flash at startup.
 
 Tracked in `docs/BACKLOG.md`. Rushing it alongside UI work would produce exactly the mid-cull reshuffle this section exists to avoid.
 

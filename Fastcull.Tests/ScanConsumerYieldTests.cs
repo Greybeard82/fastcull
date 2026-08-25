@@ -51,7 +51,9 @@ public class ScanConsumerYieldTests
                 (SendOrPostCallback Callback, object? State) item;
                 lock (_queue)
                 {
-                    if (_queue.Count == 0) { Thread.Sleep(1); continue; }
+                    // Yield rather than Sleep(1): the Windows timer granularity is ~15 ms, and
+                    // sleeping once per idle turn took this test from milliseconds to 16 seconds.
+                    if (_queue.Count == 0) { Thread.Yield(); continue; }
                     item = _queue.Dequeue();
                 }
 
@@ -131,15 +133,20 @@ public class ScanConsumerYieldTests
 
         try
         {
-            var task = ConsumeAsync(channel.Reader, () => { });
+            // A handshake rather than a delay. Timing the producer with Task.Delay made this test
+            // flaky: at millisecond granularity it sometimes wrote two items before the consumer
+            // took the first, so the channel was briefly non-empty and the consumer skipped a
+            // yield. Waiting for the consumer to signal each item makes "the channel is empty
+            // when the consumer asks" true by construction instead of by luck.
+            using var consumed = new SemaphoreSlim(0);
+            var task = ConsumeAsync(channel.Reader, () => consumed.Release());
 
-            // Fed one at a time from another thread, so the consumer is always waiting.
             var producer = Task.Run(async () =>
             {
                 for (var i = 0; i < items; i++)
                 {
                     channel.Writer.TryWrite(i);
-                    await Task.Delay(1).ConfigureAwait(false);
+                    await consumed.WaitAsync().ConfigureAwait(false);
                 }
 
                 channel.Writer.Complete();
@@ -149,11 +156,16 @@ public class ScanConsumerYieldTests
             producer.GetAwaiter().GetResult();
 
             Assert.Equal(items, task.Result);
-            // Not one-post-per-item: even a deliberately slowed producer delivers in small
-            // batches, so some iterations still find an item waiting. What matters is the
-            // contrast with the buffered case above, which posts at most once in 5,000.
-            Assert.True(context.Posts > 10,
-                $"a starved consumer should yield repeatedly; it posted only {context.Posts} times");
+            // A majority, deliberately not an exact count. Even with the handshake the producer
+            // is sometimes woken and writes again before the consumer has got back to
+            // MoveNextAsync, so a handful of items are found already waiting and taken without a
+            // yield - typically around 190 of 200. Asserting an exact figure made this test
+            // flaky, which is worse than useless.
+            //
+            // The contrast is what the test is for, and it is not marginal: the large majority of
+            // 200 items here, against at most ONE post for five thousand in the buffered case.
+            Assert.True(context.Posts > items / 2,
+                $"a starved consumer should yield for most items; it posted {context.Posts} of {items}");
         }
         finally
         {

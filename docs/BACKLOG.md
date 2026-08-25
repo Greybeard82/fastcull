@@ -9,37 +9,26 @@ the code and finding it absent.
 
 ---
 
-## 1. Stream the scan into the UI — first image on screen during active scanning
+## 1. Stream the scan into the UI — ~~first image on screen during active scanning~~ **DONE 2026-08-25**
 
-**PRD 1.2. Deferred deliberately, 2026-08-24.**
+**Built.** See PRD 1.2 for the design and the measurements. Kept here rather than deleted because
+the reasons this was deferred are worth remembering, and one of them turned out to be wrong.
 
-The scanner is not the problem. `DirectoryScanner.ScanAsync` is already a proper
-`IAsyncEnumerable<ScannedPhoto>` over a `System.Threading.Channels` channel, fed by
-`Parallel.ForEachAsync` across `coreCount - 2` workers, and it yields each file as it is parsed.
-**`MainViewModel.LoadAsync` drains it into a `List<ScannedPhoto>` before building a single
-view-model**, so the UI is not interactive during the scan despite the stream supporting it.
-
-The progress pill (PRD 1.2) is built and driven by real scan progress. What remains is the first
-image appearing mid-scan, and that is a **sequence-identity change**, not a UI change. Three
-things need rework together:
-
-1. **`FilmstripItemViewModel.Index` is immutable**, assigned at construction. It is also
-   `ICacheableItem.Index`, which drives `PrefetchRange.Contains()` and the furthest-from-cursor
-   eviction sort in PRD 3.3. Inserting a photo mid-sequence invalidates every later index.
-2. **PRD 1.3 sorts by capture time; files arrive in filesystem / parallel-completion order.**
-   Two options, both with costs:
-   - *Append then sort at the end* — the filmstrip visibly reshuffles under the cursor mid-cull.
-     Worse than waiting, and precisely the experience PRD 1.2 is trying to buy.
-   - *Insert in sorted position* — keeps the sequence always correct, but needs a mutable `Index`
-     and an O(n) reindex per insert (O(n²) over a 2,000-file folder).
-3. **`SessionStore.RegisterPhotosAsync` takes the complete sorted list in one pass**, as does the
-   rating restore. Streaming means either per-photo DB writes or ratings visibly popping in late
-   on photos already on screen.
-
-**Suggested approach if picked up:** make `Index` settable and owned by `MainViewModel`, insert in
-sorted position, and batch `SessionStore` registration on a debounce rather than per photo. Measure
-the reindex cost against PRD 3.5's 16 ms navigation budget before committing to it — a naive
-implementation will blow that budget on a large folder.
+- **The `Index` constraint was stale.** It was recorded as immutable; PRD 2.1.2's delete and PRD
+  1.9's undo had already made it settable and owned by `MainViewModel`, reindex loop included. The
+  blocker had been removed by unrelated work months before anyone re-read the entry. Worth checking
+  a deferred item's stated constraints still hold before designing around them.
+- **Sorted insert, as suggested, and it was cheap.** The feared O(n²) did not materialise: files
+  arrive in roughly name order, name order roughly tracks capture order, so nearly every arrival
+  appends. Measured on a real 5,458-photo load, per batch of 128: insert 1-6 ms, reindex 0 ms.
+- **The debounced registration suggested here would have been a bug.** Ratings are written as
+  `UPDATE photos ... WHERE path = $path`, which silently matches zero rows when the photo has no
+  row. Debouncing registration behind display would let a user rate a visible photo into nothing.
+  Registration therefore runs per batch, before its photos reach the screen.
+- **The real prize was not streaming.** Consuming the scan on the UI thread was also the cause of
+  the intermittent force-kill hang on large folders from slow storage — an `await foreach` over a
+  buffered channel never yields, so the message pump stopped entirely. Fixing the consumer fixed
+  both.
 
 ---
 

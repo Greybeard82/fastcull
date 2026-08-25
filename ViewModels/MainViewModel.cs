@@ -723,25 +723,49 @@ namespace Fastcull.ViewModels
             Sidebar.SetFolder(root);
 
             var scanner = new DirectoryScanner();
-            var scanned = new List<ScannedPhoto>();
 
-            // PRD 1.2's progress pill. The count is real and updates as the scanner yields, which
-            // it genuinely does - DirectoryScanner is an IAsyncEnumerable over a channel, and this
-            // await frees the UI thread between files.
-            //
-            // What this is NOT is PRD 1.2's full requirement, which also wants the first image on
-            // screen while the tail is still being enumerated. That needs the sequence itself to
-            // be built incrementally, which is a larger change than a progress counter - see the
-            // run report. This pill is honest about what it measures rather than a placeholder.
+            // One cancellation source per load. Streaming makes this load-bearing: before, the
+            // whole scan finished before anything else could run, so a second folder could not
+            // overlap the first. Now it can, and two live scans merging into one sequence would
+            // interleave two folders' photos.
+            _scanCts?.Cancel();
+            _scanCts?.Dispose();
+            _scanCts = new CancellationTokenSource();
+            var token = _scanCts.Token;
+
             var scanStarted = System.Diagnostics.Stopwatch.StartNew();
 
-            // A folder can vanish between being chosen and being scanned - an unplugged card, a
-            // path that resolved a moment ago. Falling back to the empty state is the same
-            // outcome PRD 1.1.1 gives a remembered folder that no longer exists.
+            // Ratings are read ONCE, before any photo arrives, and applied as each view-model is
+            // constructed. Restoring them afterwards would make a reopened session visibly pop its
+            // flags in on photos the user is already looking at.
+            Dictionary<string, StoredPhotoState> stored = new(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                _sessionStore = await SessionStore.OpenAsync(root, name: sessionName).ConfigureAwait(true);
+                stored = await _sessionStore.LoadPhotoStatesAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Session persistence unavailable: {ex}");
+                _sessionStore = null;
+            }
+
+            _undoStack.Clear();
+            ToastText = string.Empty;
+            Sidebar.SessionName = _sessionStore?.DisplayName ?? SessionStore.Describe(sessionName, root);
+            RefreshSessions();
+
+            Items.Clear();
+            _pinnedItems.Clear();
+            StageItems.Clear();
+            ActiveIndex = -1;
+            ActiveItem = null;
+            _prefetch.Reset();
+
             IAsyncEnumerable<ScannedPhoto> scan;
             try
             {
-                scan = scanner.ScanAsync(root);
+                scan = scanner.ScanAsync(root, token);
             }
             catch (Exception ex)
             {
@@ -751,119 +775,261 @@ namespace Fastcull.ViewModels
             }
 
             Diagnostics.PerfTrace.Log("load: scan begins",
-                $"thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
-                + $"isUI={_dispatcherQueue.HasThreadAccess}");
+                $"thread={Thread.CurrentThread.ManagedThreadId} isUI={_dispatcherQueue.HasThreadAccess}");
 
-            await foreach (var photo in scan)
+            var store = _sessionStore;
+            var total = 0;
+
+            // **The scan is consumed on a worker, never on the UI thread.** It used to be consumed
+            // by an `await foreach` in this method, which looks like it yields per photo but does
+            // not: with an unbounded channel and a producer running ahead, every MoveNextAsync
+            // completes synchronously, `await` never suspends, and the loop runs to exhaustion in
+            // one block. Measured, that is 5,000 iterations with the message pump getting no turn -
+            // no paint, no input, and no AppWindow.Closing, so the close button does nothing.
+            // See ScanConsumerYieldTests, which pins both regimes.
+            try
             {
-                // Already-sorted output lives under the scan root (PRD 4.3), so without this the
-                // folder reopens showing every photo twice - once at its origin and once in its
-                // bucket - and a second Finish Session re-sorts what it already sorted.
-                if (FinishPlanner.IsInsideBucket(photo.RelativePath)) continue;
+                await Task.Run(async () =>
+                {
+                    var batch = new List<ScannedPhoto>(MaxBatch);
 
-                scanned.Add(photo);
+                    await foreach (var photo in scan.WithCancellation(token).ConfigureAwait(false))
+                    {
+                        // Already-sorted output lives under the scan root (PRD 4.3), so without
+                        // this the folder reopens showing every photo twice.
+                        if (FinishPlanner.IsInsideBucket(photo.RelativePath)) continue;
 
-                // Only reveal the panel once the scan has run long enough that progress is worth
-                // watching; below that it would be a flash at startup.
-                Sidebar.ReportScanProgress(scanned.Count, scanStarted.ElapsedMilliseconds > ScanRevealDelayMs);
+                        batch.Add(photo);
+                        total++;
+
+                        // The first photo goes over on its own so something is on screen as early
+                        // as possible; batches grow after that so a 5,000-file folder costs about
+                        // fifty dispatcher hops rather than five thousand.
+                        var target = total == 1 ? 1 : MaxBatch;
+                        if (batch.Count < target) continue;
+
+                        await CommitBatchAsync(batch, store, stored, token).ConfigureAwait(false);
+                        batch.Clear();
+                    }
+
+                    if (batch.Count > 0)
+                        await CommitBatchAsync(batch, store, stored, token).ConfigureAwait(false);
+                }, token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                Diagnostics.PerfTrace.Log("load: cancelled", $"another folder opened after {total} photos");
+                return;
             }
 
+            if (token.IsCancellationRequested) return;
+
             Diagnostics.PerfTrace.Log("load: scan done",
-                $"{scanned.Count} photos in {scanStarted.ElapsedMilliseconds} ms, "
-                + $"thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
-                + $"isUI={_dispatcherQueue.HasThreadAccess}");
+                $"{Items.Count} photos in {scanStarted.ElapsedMilliseconds} ms, "
+                + $"thread={Thread.CurrentThread.ManagedThreadId} isUI={_dispatcherQueue.HasThreadAccess}");
 
             Sidebar.CompleteScan();
 
-            var sorted = scanned
-                .OrderBy(p => p.SortTime)
-                .ThenBy(p => p.CaptureSubsec)
-                .ThenBy(p => p.FilePath, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            // Built once at the end rather than per batch: both are whole-sequence views, and
+            // rebuilding them fifty times during a scan would cost more than they are worth.
+            RefreshTally();
+            RebuildFolderViews();
+            Sidebar.CanFinishSession = Items.Count > 0;
 
-            // Persistence must never stop the app opening: a locked or corrupt session DB
-            // degrades to an in-memory session rather than an empty filmstrip.
-            Dictionary<string, StoredPhotoState> stored = new(StringComparer.OrdinalIgnoreCase);
-            var dbClock = System.Diagnostics.Stopwatch.StartNew();
-            try
+            if (Items.Count == 0) ShowEmptyState(root);
+
+            // The claim streaming has to earn: the sequence built by repeated insertion is in
+            // capture order, not merely sorted at the end. Checked against the live sequence
+            // rather than trusted, because the cost of being wrong here is showing somebody's
+            // shoot in the wrong order.
+            if (Diagnostics.PerfTrace.Enabled)
             {
-                Diagnostics.PerfTrace.Log("load: db open",
-                    $"thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
-                    + $"isUI={_dispatcherQueue.HasThreadAccess}");
-                _sessionStore = await SessionStore.OpenAsync(root, name: sessionName);
+                var outOfOrder = 0;
+                for (var i = 1; i < Items.Count; i++)
+                    if (SequenceOrder.Compare(Items[i - 1], Items[i]) > 0) outOfOrder++;
 
-                Diagnostics.PerfTrace.Log("load: db register",
-                    $"{sorted.Count} rows, thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
-                    + $"isUI={_dispatcherQueue.HasThreadAccess}");
-                await _sessionStore.RegisterPhotosAsync(sorted);
+                var indexDrift = 0;
+                for (var i = 0; i < Items.Count; i++)
+                    if (Items[i].Index != i) indexDrift++;
 
-                Diagnostics.PerfTrace.Log("load: db states",
-                    $"after {dbClock.ElapsedMilliseconds} ms, thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
-                    + $"isUI={_dispatcherQueue.HasThreadAccess}");
-                stored = await _sessionStore.LoadPhotoStatesAsync();
+                var picked = Items.Count(i => i.CullState.Flag == Flag.Picked && i.CullState.Stars == 0);
+                var rejected = Items.Count(i => i.CullState.Flag == Flag.Rejected);
+                var starred = Items.Count(i => i.CullState.Stars > 0);
+                var rotated = Items.Count(i => i.Rotation.QuarterTurns != 0);
 
-                Diagnostics.PerfTrace.Log("load: db done", $"total {dbClock.ElapsedMilliseconds} ms");
+                Diagnostics.PerfTrace.Log("load: ORDER CHECK",
+                    $"outOfOrder={outOfOrder} indexDrift={indexDrift} of {Items.Count}");
+
+                // Restored state, reported at load. Streaming applies ratings as each view-model
+                // is constructed rather than in a pass afterwards, so this is the check that PRD
+                // 4.1's resume still works through the new path.
+                Diagnostics.PerfTrace.Log("load: RESTORED",
+                    $"picked={picked} rejected={rejected} starred={starred} rotated={rotated}");
             }
-            catch (Exception ex)
+
+            Diagnostics.PerfTrace.Log("load: COMPLETE", $"total {scanStarted.ElapsedMilliseconds} ms");
+        }
+
+        /// <summary>How many photos accumulate on the worker before a hop to the UI thread.</summary>
+        private const int MaxBatch = 128;
+
+        private CancellationTokenSource? _scanCts;
+
+        /// <summary>
+        /// Registers a batch and then puts it on screen, in that order and never the other way
+        /// round.
+        ///
+        /// **The ordering is a correctness requirement, not tidiness.** A rating is written as
+        /// <c>UPDATE photos ... WHERE path = $path</c>, which silently affects zero rows when the
+        /// photo has no row yet. A photo visible before it is registered is a photo the user can
+        /// rate into nothing.
+        /// </summary>
+        private async Task CommitBatchAsync(
+            List<ScannedPhoto> batch, SessionStore? store,
+            Dictionary<string, StoredPhotoState> stored, CancellationToken token)
+        {
+            if (batch.Count == 0 || token.IsCancellationRequested) return;
+
+            var registered = batch.ToList();
+
+            if (store is not null)
             {
-                System.Diagnostics.Debug.WriteLine($"[FastCull] Session persistence unavailable: {ex}");
-                _sessionStore = null;
+                try
+                {
+                    var dbClock = System.Diagnostics.Stopwatch.StartNew();
+                    await store.RegisterPhotosAsync(registered).ConfigureAwait(false);
+                    Diagnostics.PerfTrace.Log("batch: register", $"{registered.Count} rows {dbClock.ElapsedMilliseconds} ms");
+                }
+                catch (Exception ex)
+                {
+                    // A failed registration costs persistence for these photos, not their display.
+                    System.Diagnostics.Debug.WriteLine($"[FastCull] Could not register a batch: {ex}");
+                }
             }
 
-            // The name comes from the store when there is one, so a reopened session shows the
-            // name it was given rather than the folder it happens to live in. With no store - a
-            // locked or corrupt database - the folder name is still the right answer.
-            // The history closes over items from the previous sequence; undoing one after the
-            // folder changed would write a rating onto a photo that is no longer on screen.
-            _undoStack.Clear();
-            ToastText = string.Empty;
+            if (token.IsCancellationRequested) return;
 
-            Sidebar.SessionName = _sessionStore?.DisplayName ?? SessionStore.Describe(sessionName, root);
-            RefreshSessions();
+            var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            var buildClock = System.Diagnostics.Stopwatch.StartNew();
-            Items.Clear();
-            var index = 0;
-            foreach (var photo in sorted)
+            var enqueued = _dispatcherQueue.TryEnqueue(() =>
             {
-                var item = new FilmstripItemViewModel(photo, index);
+                try
+                {
+                    if (!token.IsCancellationRequested) MergeBatch(registered, stored);
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[FastCull] Could not merge a batch: {ex}");
+                }
+                finally
+                {
+                    done.TrySetResult();
+                }
+            });
+
+            if (!enqueued) { done.TrySetResult(); return; }
+
+            // Awaited rather than fired and forgotten: without back-pressure a fast scan would
+            // queue thousands of merges on a dispatcher that cannot keep up, which is the same
+            // unbounded-producer problem one layer higher.
+            await done.Task.ConfigureAwait(false);
+        }
+
+        /// <summary>Capture order (PRD 1.3), identical to the comparison the old whole-list sort used.</summary>
+        private static readonly IComparer<FilmstripItemViewModel> SequenceOrder =
+            Comparer<FilmstripItemViewModel>.Create((a, b) =>
+            {
+                var byTime = a.Photo.SortTime.CompareTo(b.Photo.SortTime);
+                if (byTime != 0) return byTime;
+
+                var bySubsec = Nullable.Compare(a.Photo.CaptureSubsec, b.Photo.CaptureSubsec);
+                if (bySubsec != 0) return bySubsec;
+
+                return string.Compare(a.Photo.FilePath, b.Photo.FilePath, StringComparison.OrdinalIgnoreCase);
+            });
+
+        /// <summary>
+        /// Merges one batch into the live sequence in capture order, on the UI thread.
+        ///
+        /// **The cursor keeps its photo, not its number.** An insert landing at or before the
+        /// active index would otherwise slide a different photograph under a user who is mid-cull -
+        /// exactly the reshuffle this design exists to avoid - so ActiveIndex is nudged to follow
+        /// the item it was already on. The photo does not change; only its ordinal does.
+        /// </summary>
+        private void MergeBatch(List<ScannedPhoto> batch, Dictionary<string, StoredPhotoState> stored)
+        {
+            batch.Sort((a, b) =>
+            {
+                var byTime = a.SortTime.CompareTo(b.SortTime);
+                if (byTime != 0) return byTime;
+                var bySubsec = Nullable.Compare(a.CaptureSubsec, b.CaptureSubsec);
+                if (bySubsec != 0) return bySubsec;
+                return string.Compare(a.FilePath, b.FilePath, StringComparison.OrdinalIgnoreCase);
+            });
+
+            var mergeClock = System.Diagnostics.Stopwatch.StartNew();
+            var lowestTouched = int.MaxValue;
+
+            foreach (var photo in batch)
+            {
+                var item = new FilmstripItemViewModel(photo, 0);
                 if (stored.TryGetValue(photo.FilePath, out var state))
                 {
                     item.CullState = state.Cull;
                     item.Rotation = state.Rotation;
                 }
-                Items.Add(item);
-                index++;
+
+                var at = SequenceMerge.FindInsertionPoint(Items, item, SequenceOrder);
+                Items.Insert(at, item);
+
+                if (at < lowestTouched) lowestTouched = at;
+
+                // Follows the photo, not the number - but only once the user owns the cursor.
+                // Before that it stays at position 0 and the block below re-points it.
+                if (!_cursorFollowsStart && ActiveIndex >= 0 && at <= ActiveIndex) ActiveIndex++;
             }
 
-            Diagnostics.PerfTrace.Log("load: items added",
-                $"{Items.Count} in {buildClock.ElapsedMilliseconds} ms, "
-                + $"isUI={_dispatcherQueue.HasThreadAccess}");
-            buildClock.Restart();
+            var insertMs = mergeClock.ElapsedMilliseconds;
+            mergeClock.Restart();
 
-            // After the restore loop, not before: stored ratings from a previous session are part
-            // of the count, so a folder reopened mid-cull shows its real progress immediately.
-            RefreshTally();
-            Diagnostics.PerfTrace.Log("load: tally", $"{buildClock.ElapsedMilliseconds} ms");
-            buildClock.Restart();
+            // Only from the first disturbed position: an appending batch - the overwhelming
+            // majority - reindexes just the photos it added.
+            for (var i = lowestTouched; i < Items.Count; i++) Items[i].Index = i;
 
-            // Both derive from the sequence and neither changes again until the folder does, so
-            // they are built once here rather than on every rating like the tally.
-            Sidebar.UpdateFormats(sorted.Select(p => (p.FileName, p.Family)));
-            Sidebar.UpdateFolderTree(
-                Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
-                sorted.Select((p, i) => new FolderTreeEntry(p.RelativePath, i)));
+            var reindexMs = mergeClock.ElapsedMilliseconds;
+            mergeClock.Restart();
 
-            Diagnostics.PerfTrace.Log("load: sidebar views", $"{buildClock.ElapsedMilliseconds} ms");
-            buildClock.Restart();
+            Sidebar.ReportScanProgress(Items.Count, true);
 
-            Sidebar.CanFinishSession = Items.Count > 0;
+            // The first photo to arrive becomes the cursor.
+            if (ActiveIndex < 0 && Items.Count > 0)
+            {
+                IsEmpty = false;
+                SetActiveIndex(0, force: true);
+                _cursorFollowsStart = true;   // SetActiveIndex(int) clears it; this is not the user.
+            }
+            else if (_cursorFollowsStart && lowestTouched == 0 && ActiveIndex != 0)
+            {
+                // An earlier-captured photo displaced position 0 and the user has not taken the
+                // cursor yet, so it re-points rather than drifting to whatever happened to be
+                // scanned first. Only when position 0 actually changed - re-pointing on every
+                // batch would rebuild the stage fifty times for nothing.
+                SetActiveIndex(0, force: true);
+                _cursorFollowsStart = true;
+            }
+            else
+            {
+                // Indices shifted, so the window and the eviction distances are stale. Recomputed
+                // once per batch rather than once per photo - per photo would run PRD 3.3's whole
+                // keep-set pass fifty times more often than it needs to.
+                _prefetch.OnCursorMoved(ActiveIndex, Items);
+            }
 
-            SetActiveIndex(Items.Count > 0 ? 0 : -1);
-
-            Diagnostics.PerfTrace.Log("load: first cursor", $"{buildClock.ElapsedMilliseconds} ms");
-            Diagnostics.PerfTrace.Log("load: COMPLETE", $"total {scanStarted.ElapsedMilliseconds} ms");
+            Diagnostics.PerfTrace.Log("batch: merge",
+                $"n={batch.Count} total={Items.Count} insert={insertMs}ms reindex={reindexMs}ms "
+                + $"prefetch={mergeClock.ElapsedMilliseconds}ms lowest={lowestTouched}");
         }
+
 
         /// <summary>
         /// Repopulates PRD 4.1's dropdown. Enumerating the session databases touches disk, so it
@@ -904,7 +1070,22 @@ namespace Fastcull.ViewModels
         }
 
         /// <summary>Sole entry point for changing the active photo. Never touches scroll position - that is a View concern.</summary>
-        public void SetActiveIndex(int index) => SetActiveIndex(index, force: false);
+        /// <summary>
+        /// True until the user first moves the cursor themselves.
+        ///
+        /// While it holds, the cursor follows position 0 as earlier-captured photos stream in, so
+        /// somebody who waits for the load lands on the chronologically first photo exactly as
+        /// they did before streaming. The moment they navigate or rate, the cursor stops following
+        /// position and starts following its PHOTO instead - because from then on, moving what is
+        /// under them is the thing that must never happen.
+        /// </summary>
+        private bool _cursorFollowsStart = true;
+
+        public void SetActiveIndex(int index)
+        {
+            _cursorFollowsStart = false;
+            SetActiveIndex(index, force: false);
+        }
 
         /// <summary>
         /// Raised once a cursor move is **completely** applied - index, active item, and the
@@ -1214,6 +1395,12 @@ namespace Fastcull.ViewModels
         {
             var item = ActiveItem;
             if (item is null) return;
+
+            // Rating claims the cursor just as navigating does. Without this, rating the first
+            // photo and then having an earlier-captured one stream in would re-point the cursor,
+            // and the next keystroke would land on a different photograph than the one the user
+            // just rated - which is precisely the class of surprise streaming must not introduce.
+            _cursorFollowsStart = false;
 
             var before = item.CullState;
             var after = transition(before);
