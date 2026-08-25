@@ -750,6 +750,10 @@ namespace Fastcull.ViewModels
                 return;
             }
 
+            Diagnostics.PerfTrace.Log("load: scan begins",
+                $"thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
+                + $"isUI={_dispatcherQueue.HasThreadAccess}");
+
             await foreach (var photo in scan)
             {
                 // Already-sorted output lives under the scan root (PRD 4.3), so without this the
@@ -764,6 +768,11 @@ namespace Fastcull.ViewModels
                 Sidebar.ReportScanProgress(scanned.Count, scanStarted.ElapsedMilliseconds > ScanRevealDelayMs);
             }
 
+            Diagnostics.PerfTrace.Log("load: scan done",
+                $"{scanned.Count} photos in {scanStarted.ElapsedMilliseconds} ms, "
+                + $"thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
+                + $"isUI={_dispatcherQueue.HasThreadAccess}");
+
             Sidebar.CompleteScan();
 
             var sorted = scanned
@@ -775,11 +784,25 @@ namespace Fastcull.ViewModels
             // Persistence must never stop the app opening: a locked or corrupt session DB
             // degrades to an in-memory session rather than an empty filmstrip.
             Dictionary<string, StoredPhotoState> stored = new(StringComparer.OrdinalIgnoreCase);
+            var dbClock = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                Diagnostics.PerfTrace.Log("load: db open",
+                    $"thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
+                    + $"isUI={_dispatcherQueue.HasThreadAccess}");
                 _sessionStore = await SessionStore.OpenAsync(root, name: sessionName);
+
+                Diagnostics.PerfTrace.Log("load: db register",
+                    $"{sorted.Count} rows, thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
+                    + $"isUI={_dispatcherQueue.HasThreadAccess}");
                 await _sessionStore.RegisterPhotosAsync(sorted);
+
+                Diagnostics.PerfTrace.Log("load: db states",
+                    $"after {dbClock.ElapsedMilliseconds} ms, thread={System.Threading.Thread.CurrentThread.ManagedThreadId} "
+                    + $"isUI={_dispatcherQueue.HasThreadAccess}");
                 stored = await _sessionStore.LoadPhotoStatesAsync();
+
+                Diagnostics.PerfTrace.Log("load: db done", $"total {dbClock.ElapsedMilliseconds} ms");
             }
             catch (Exception ex)
             {
@@ -798,6 +821,7 @@ namespace Fastcull.ViewModels
             Sidebar.SessionName = _sessionStore?.DisplayName ?? SessionStore.Describe(sessionName, root);
             RefreshSessions();
 
+            var buildClock = System.Diagnostics.Stopwatch.StartNew();
             Items.Clear();
             var index = 0;
             foreach (var photo in sorted)
@@ -812,9 +836,16 @@ namespace Fastcull.ViewModels
                 index++;
             }
 
+            Diagnostics.PerfTrace.Log("load: items added",
+                $"{Items.Count} in {buildClock.ElapsedMilliseconds} ms, "
+                + $"isUI={_dispatcherQueue.HasThreadAccess}");
+            buildClock.Restart();
+
             // After the restore loop, not before: stored ratings from a previous session are part
             // of the count, so a folder reopened mid-cull shows its real progress immediately.
             RefreshTally();
+            Diagnostics.PerfTrace.Log("load: tally", $"{buildClock.ElapsedMilliseconds} ms");
+            buildClock.Restart();
 
             // Both derive from the sequence and neither changes again until the folder does, so
             // they are built once here rather than on every rating like the tally.
@@ -823,9 +854,15 @@ namespace Fastcull.ViewModels
                 Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)),
                 sorted.Select((p, i) => new FolderTreeEntry(p.RelativePath, i)));
 
+            Diagnostics.PerfTrace.Log("load: sidebar views", $"{buildClock.ElapsedMilliseconds} ms");
+            buildClock.Restart();
+
             Sidebar.CanFinishSession = Items.Count > 0;
 
             SetActiveIndex(Items.Count > 0 ? 0 : -1);
+
+            Diagnostics.PerfTrace.Log("load: first cursor", $"{buildClock.ElapsedMilliseconds} ms");
+            Diagnostics.PerfTrace.Log("load: COMPLETE", $"total {scanStarted.ElapsedMilliseconds} ms");
         }
 
         /// <summary>
@@ -999,6 +1036,19 @@ namespace Fastcull.ViewModels
                 if (item.DisplayImage is not null) display++;
                 if (item.IsDisplayStranded) displayStranded++;
             }
+
+            // GC is on the suspect list: the decode path allocates a full-file byte[] per image,
+            // and anything over 85 KB goes on the Large Object Heap. A fragmented, growing LOH
+            // produces exactly the symptom being chased - long, intermittent, blocking pauses.
+            var gcInfo = GC.GetGCMemoryInfo();
+            var pauseMs = 0.0;
+            foreach (var d in gcInfo.PauseDurations) pauseMs += d.TotalMilliseconds;
+
+            Diagnostics.PerfTrace.Log("gc",
+                $"gen0={GC.CollectionCount(0)} gen1={GC.CollectionCount(1)} gen2={GC.CollectionCount(2)} "
+                + $"heapMB={GC.GetTotalMemory(false) / (1024 * 1024)} "
+                + $"lastPauseMs={pauseMs:F0} pausePct={gcInfo.PauseTimePercentage:F1} "
+                + $"committedMB={gcInfo.TotalCommittedBytes / (1024 * 1024)}");
 
             Diagnostics.PerfTrace.Snapshot(reason,
                 $"items={Items.Count} active={ActiveIndex} window={PrefetchRange.Start}-{PrefetchRange.EndInclusive} "

@@ -67,6 +67,11 @@ namespace Fastcull
             _perfTimer.IsRepeating = true;
             _perfTimer.Tick += (_, _) => Filmstrip.ViewModel.LogPerfSnapshot("tick");
             _perfTimer.Start();
+
+            // The snapshot timer runs ON the UI thread, so it goes silent exactly when the
+            // interesting thing happens. The watchdog is the other half: it lives on a background
+            // thread and measures how long the UI thread takes to answer.
+            Fastcull.Diagnostics.UiWatchdog.Start(DispatcherQueue);
         }
 
         // ------------------------------------------------------------------
