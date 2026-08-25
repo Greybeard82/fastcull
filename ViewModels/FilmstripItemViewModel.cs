@@ -1058,8 +1058,13 @@ namespace Fastcull.ViewModels
         /// </summary>
         private Task<SoftwareBitmap?> DecodeTierAsync(bool displayTier, CancellationToken cancellationToken)
         {
-            // Through the gate: PRD 3.3 caps concurrent decodes at min(6, coreCount - 2). The
-            // sliding window decides which photos to decode; this decides how many run at once.
+            // Through the gate: PRD 3.3 bounds how many decodes run at once. The sliding window
+            // decides WHICH photos to decode; this decides how many at a time and in what order.
+            //
+            // The display tier is Interactive and the thumbnail tier is Background, which is the
+            // whole of PRD 3.3.1's priority rule. A filmstrip realizes a container for every photo
+            // scrolled past, so the thumbnails outnumber the display decodes by orders of magnitude
+            // - and the display decode is the one the user is actually waiting to see.
             return DecodeGate.RunAsync(() =>
             {
                 if (Photo.Family != FormatFamily.Raw)
@@ -1070,9 +1075,10 @@ namespace Fastcull.ViewModels
                 }
 
                 return DecodeRawWithFallbackAsync(displayTier, cancellationToken);
-            }, cancellationToken, Diagnostics.PerfTrace.Enabled
-                ? $"{(displayTier ? "display" : "thumb")}[{Index}]"
-                : null);
+            },
+            cancellationToken,
+            displayTier ? DecodePriority.Interactive : DecodePriority.Background,
+            Diagnostics.PerfTrace.Enabled ? $"{(displayTier ? "display" : "thumb")}[{Index}]" : null);
         }
 
         private async Task<SoftwareBitmap?> DecodeRawWithFallbackAsync(bool displayTier, CancellationToken cancellationToken)

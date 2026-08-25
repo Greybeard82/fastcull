@@ -14,12 +14,65 @@ namespace Fastcull.Tests;
 public class DecodeGateTests
 {
     [Fact]
-    public void MaxConcurrency_IsMinOfSixAndCoresMinusTwo_FlooredAtOne()
+    public void MaxConcurrency_IsCoresMinusTwo_ClampedToTwoThroughEight()
     {
-        var expected = Math.Max(1, Math.Min(6, Environment.ProcessorCount - 2));
+        // Retuned from min(6, cores - 2) once decodes actually ran in parallel. While every decode
+        // went through a FileRandomAccessStream, WIC serialised them process-wide and throughput
+        // was flat from 1 thread to 12 - the cap was a queue in front of a single worker, so its
+        // value could not matter. Decoding from memory made it matter.
+        var expected = Math.Clamp(Environment.ProcessorCount - 2, 2, 8);
 
         Assert.Equal(expected, DecodeGate.MaxConcurrency);
-        Assert.InRange(DecodeGate.MaxConcurrency, 1, 6);
+        Assert.InRange(DecodeGate.MaxConcurrency, 2, 8);
+    }
+
+    [Fact]
+    public void BackgroundConcurrency_IsBoundedBelowTheTotal()
+    {
+        // The priority mechanism is exactly this inequality: background work can never hold every
+        // slot, so an interactive decode can never be stuck behind an unbounded run of thumbnails.
+        Assert.InRange(DecodeGate.MaxBackgroundConcurrency, 1, DecodeGate.MaxConcurrency - 1);
+    }
+
+    [Fact]
+    public async Task BackgroundWorkNeverOccupiesEverySlot()
+    {
+        // Saturate the gate with background work, then check a slot is still reachable by an
+        // interactive decode without waiting for any of it to finish.
+        var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = 0;
+
+        var hogs = Enumerable.Range(0, DecodeGate.MaxConcurrency * 4).Select(_ =>
+            DecodeGate.RunAsync<object?>(async () =>
+            {
+                Interlocked.Increment(ref started);
+                await hold.Task.ConfigureAwait(false);
+                return null;
+            }, CancellationToken.None, DecodePriority.Background, null)).ToArray();
+
+        try
+        {
+            // Let them pile up against the background cap.
+            for (var i = 0; i < 100 && Volatile.Read(ref started) < DecodeGate.MaxBackgroundConcurrency; i++)
+                await Task.Delay(10);
+
+            Assert.Equal(DecodeGate.MaxBackgroundConcurrency, Volatile.Read(ref started));
+
+            var interactive = DecodeGate.RunAsync<object?>(
+                () => Task.FromResult<object?>("ran"), CancellationToken.None,
+                DecodePriority.Interactive, null);
+
+            // The background work is still parked and will not finish until this test releases it,
+            // so the only way this completes is by taking a slot the background cap left free.
+            var winner = await Task.WhenAny(interactive, Task.Delay(5_000));
+            Assert.Same(interactive, winner);
+            Assert.Equal("ran", await interactive);
+        }
+        finally
+        {
+            hold.SetResult();
+            await Task.WhenAll(hogs);
+        }
     }
 
     [Fact]

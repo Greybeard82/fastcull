@@ -776,6 +776,8 @@ Chain per image:
 **As built — the decoder abstraction was never needed, and RAW works differently than planned.** There is no `IImageDecoder`, no `LibRawDecoder` and no `IRawDebayer`. See §5's architecture note. What exists:
 
 - **`ThumbnailService`** — WIC via `Windows.Graphics.Imaging`, for JPEG/PNG and as the RAW fallback. One shared scaled-decode (`DecodeScaledFromStreamAsync`) serves every tier; the tier is just a requested long edge (160 thumbnail / 960 display / viewport-sized zoom).
+- **The decoder reads from an in-memory copy of the file, never from a `FileRandomAccessStream`** — a correctness-of-performance rule, not a micro-optimisation. Through a file stream, WIC serialises decodes **process-wide**: measured over 15.9 MP JPEGs, throughput was flat at ~13/sec from 1 thread to 12 with cores-busy pinned at **1.00**. The identical decode from an in-memory stream reaches 75.7/sec at **7.81 cores busy**. The bounded pool below was therefore a queue in front of a single worker, and no amount of hardware could make the filmstrip fill faster. Files above 256 MB still stream from disk, so one pathological input cannot turn eight concurrent decodes into eight enormous allocations.
+- This is also why RAW never showed the symptom: `RawPreviewDecoder` already extracted its preview into a `byte[]` and decoded from memory, so it was scaling to ~10 cores while JPEG sat on one.
 - **`RawPreviewDecoder`** — RAW by **embedded-JPEG extraction**, not debayering. It reads a 16 MB scan window, locates embedded JPEG streams by their `FF D8 FF` / `FF D9` markers, sorts candidates smallest-first and decodes the smallest that satisfies the requested edge, then hands those bytes to the very same `ThumbnailService` decode. Vendor-agnostic by design: Sony and Canon store previews at different offsets under different maker-note tags, but both store ordinary JPEG. Costs about 30 ms against roughly 1000 ms for WIC's full debayer of the same file.
 - Callers select between the two on `FormatFamily`, never on file extension — the original intent survives even though the abstraction did not.
 
@@ -790,7 +792,7 @@ Chain per image:
 
 **Built 2026-08-23/24 and measured.** Everything in this section is implemented except the VRAM texture cache, which is explicitly marked below. The peak-working-set budget in §3.5 went from **5.25 GB (failing)** to **2.34 GB** against its 4 GB ceiling as a result — see `docs/benchmarks/2026-08-24-ceiling-2gb.md`.
 
-- Sliding window: active index plus 5 ahead, 2 behind, on a bounded worker pool of `min(6, coreCount - 2)`. **Implemented** as `PrefetchWindow` and `DecodeGate` (a `SemaphoreSlim`); 6 workers on a 12-core machine.
+- Sliding window: active index plus 5 ahead, 2 behind, on a bounded worker pool of `Clamp(coreCount - 2, 2, 8)`. **Implemented** as `PrefetchWindow` and `DecodeGate` (a `SemaphoreSlim`); 8 workers on a 12-thread machine. **Retuned from `min(6, coreCount - 2)` on 2026-08-25**, once decodes actually ran in parallel — while they serialised, the cap's value could not matter. The ceiling of 8 is measured: past it the workload oversubscribes, the gain from 6 to 12 threads being 5% while cores-busy *fell* from 3.67 to 2.46.
 - Direction-aware: the window reverses after three consecutive backwards moves. **Implemented, with one deliberate deviation:** reversal is **symmetric** — three consecutive moves in *either* direction set the orientation. Reverting on a single forward step made the window thrash on any jitter, and a user who steps back three and forward one is still going backwards.
 - **Keep-set is the window UNION the pinned stage, not the window alone.** At nine slots the stage spans ±4, which is *wider* than the −2 lookbehind, so a window-only keep-set would cancel loads the stage had just started, on every navigation.
 - LRU cache with a hard ceiling of **2 GB** system memory, evicting furthest-from-cursor first. Lowered from 3 GB on 2026-08-24: at 3 GB the cache filled and stayed filled, putting the measured peak working set at 3.26 GB against §3.5's 4 GB budget — passing, but with only 16% headroom. The window plus a nine-slot stage is roughly 17 items, so the ceiling governs how much the cache may hoard beyond what it needs, not how much it needs.
@@ -802,6 +804,21 @@ Chain per image:
 - Cache is cleared on folder change, not on session end.
 
 **A tension worth naming:** the 2 GB ceiling and §3.5's 4 GB peak-working-set budget were set independently, and the ceiling is now half the budget. At 3 GB the measured peak was 3.26 GB — passing, but only because the ceiling happened to fit. At 2 GB it is 2.34 GB, with real headroom. The peak sits *above* the ceiling because the ceiling caps resident decoded pixels while the working set also carries roughly 460 MB of baseline process overhead plus transient decode buffers.
+
+#### 3.3.1 Decode priority — the display tier outranks thumbnails
+
+Two kinds of decode share the pool, and they are not equally urgent.
+
+| Priority | Tiers | Why |
+| :--- | :--- | :--- |
+| **Interactive** | Display tier, zoom tier | A photo somebody is looking at, or about to. This is what the app is judged on. |
+| **Background** | Filmstrip thumbnails | One per photo in the folder. Nobody is waiting on any particular one. |
+
+**Background work may hold at most half the pool.** A background decode takes a second, smaller permit *before* the shared one, so only that many are ever queued on the shared gate — which bounds how long an Interactive decode can be stuck behind them, however many thousand thumbnails the filmstrip has asked for. The ordering of those two acquisitions is load-bearing; reversing them silently restores the old behaviour while leaving every counter and test looking identical.
+
+It is not zero-sum with throughput: when no Interactive work exists, background still runs at its full share, and when background is idle Interactive gets the whole pool.
+
+**Why it exists.** Rapid navigation auto-scrolls the filmstrip, which realizes a container per photo passed, which queues a thumbnail decode each. Before this rule those sat in one FIFO ahead of the display decode the user was actually waiting to see. Measured over a 120-step navigation burst, the display tier's wait at the gate was **p95 2,784 ms**; with the rule, **p95 36 ms**.
 
 ### 3.4 GPU Acceleration
 Three stages, three different answers.

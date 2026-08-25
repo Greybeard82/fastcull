@@ -138,9 +138,91 @@ namespace Fastcull.Benchmarks
             Console.WriteLine($"  {"threads",7}  {"total",9}  {"per decode",11}  {"throughput",12}  {"cores busy",11}");
 
             await SweepAsync(files, viaMemory: true).ConfigureAwait(false);
+
+            Console.WriteLine();
+            Console.WriteLine("THE SHIPPED PATH: ThumbnailService.DecodeThumbnailAsync");
+            Console.WriteLine("(what the app actually calls - this is the row that has to move)");
+            Console.WriteLine();
+            Console.WriteLine($"  {"threads",7}  {"total",9}  {"per decode",11}  {"throughput",12}  {"cores busy",11}");
+
+            await SweepAsync(files, viaMemory: false, viaShipped: true).ConfigureAwait(false);
+
+            Console.WriteLine();
+            Console.WriteLine("WHICH THUMBNAIL ROUTE EACH FILE TOOK");
+            Console.WriteLine($"  from the file's own EXIF thumbnail : {Fastcull.Diagnostics.PerfTrace.Get("thumb from EXIF")}");
+            Console.WriteLine($"  fell back to a full decode        : {Fastcull.Diagnostics.PerfTrace.Get("thumb from full decode")}");
+            Console.WriteLine();
+
+            // Per file, so a fallback can be attributed to the file that caused it rather than
+            // inferred from a ratio - and so the resulting aspect can be checked against the
+            // source, which is what the letterboxed-EXIF-thumbnail guard exists to protect.
+            Console.WriteLine("PER FILE: route, result size, and aspect against the source");
+            Console.WriteLine();
+
+            foreach (var f in files)
+            {
+                var before = Fastcull.Diagnostics.PerfTrace.Get("thumb from EXIF");
+
+                var t = Stopwatch.GetTimestamp();
+                using var bmp = await ThumbnailService.DecodeThumbnailAsync(f).ConfigureAwait(false);
+                var ms = Stopwatch.GetElapsedTime(t).TotalMilliseconds;
+
+                var route = Fastcull.Diagnostics.PerfTrace.Get("thumb from EXIF") > before ? "EXIF" : "full decode";
+
+                var sourceAspect = await SourceAspectAsync(f).ConfigureAwait(false);
+                var gotAspect = bmp is not null && bmp.PixelHeight > 0
+                    ? bmp.PixelWidth / (double)bmp.PixelHeight
+                    : 0;
+
+                var drift = sourceAspect > 0 && gotAspect > 0
+                    ? Math.Abs(gotAspect - sourceAspect) / sourceAspect * 100
+                    : -1;
+
+                Console.WriteLine(string.Create(CultureInfo.InvariantCulture,
+                    $"  {Path.GetFileName(f),-26} {route,-12} {bmp?.PixelWidth ?? 0,4}x{bmp?.PixelHeight ?? 0,-4} "
+                    + $"{ms,6:F1}ms   aspect drift {drift,5:F2}%"));
+            }
         }
 
-        private static async Task SweepAsync(List<string> files, bool viaMemory)
+        private static async Task<double> SourceAspectAsync(string file)
+        {
+            try
+            {
+                if (IsRaw(file)) return 0;
+
+                using var stream = await FileRandomAccessStream.OpenAsync(file, FileAccessMode.Read).AsTask().ConfigureAwait(false);
+                var d = await BitmapDecoder.CreateAsync(stream).AsTask().ConfigureAwait(false);
+
+                // Compared against the ORIENTED aspect, since the thumbnail comes back rotated.
+                var o = await ReadOrientationForCompareAsync(d).ConfigureAwait(false);
+                var w = (double)d.PixelWidth;
+                var h = (double)d.PixelHeight;
+                if (o is 5 or 6 or 7 or 8) (w, h) = (h, w);
+
+                return h > 0 ? w / h : 0;
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+        }
+
+        private static async Task<int> ReadOrientationForCompareAsync(BitmapDecoder decoder)
+        {
+            try
+            {
+                var p = await decoder.BitmapProperties
+                    .GetPropertiesAsync(new[] { "System.Photo.Orientation" }).AsTask().ConfigureAwait(false);
+                if (p.TryGetValue("System.Photo.Orientation", out var v) && v?.Value is ushort raw) return raw;
+            }
+            catch (Exception)
+            {
+            }
+
+            return 1;
+        }
+
+        private static async Task SweepAsync(List<string> files, bool viaMemory, bool viaShipped = false)
         {
             foreach (var threads in new[] { 1, 2, 4, 6, 8, 12 })
             {
@@ -162,7 +244,11 @@ namespace Fastcull.Benchmarks
                     await gate.WaitAsync().ConfigureAwait(false);
                     try
                     {
-                        if (viaMemory) await MemoryDecodeAsync(f).ConfigureAwait(false);
+                        if (viaShipped)
+                        {
+                            using var bmp = await ThumbnailService.DecodeThumbnailAsync(f).ConfigureAwait(false);
+                        }
+                        else if (viaMemory) await MemoryDecodeAsync(f).ConfigureAwait(false);
                         else await TimeAsync(f, s => ScaledAsync(s, 160, BitmapInterpolationMode.Fant)).ConfigureAwait(false);
                     }
                     finally
