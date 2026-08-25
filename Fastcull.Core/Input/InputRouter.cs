@@ -58,6 +58,10 @@ namespace Fastcull.Input
 
         /// <summary>PRD 2.1.2: move the selected photo to the Recycle Bin.</summary>
         DeletePhoto,
+
+        /// <summary>PRD 1.9's undo stack. Ctrl+Z / Ctrl+Y.</summary>
+        Undo,
+        Redo,
     }
 
     public readonly record struct ResolvedInput(AppCommand Command, int Payload)
@@ -93,8 +97,28 @@ namespace Fastcull.Input
         /// standalone fullscreen with Shift (PRD 1.7.3). It is defaulted so the large existing
         /// body of two-argument callers and tests keeps compiling and keeps meaning what it did.
         /// </param>
-        public static ResolvedInput Resolve(VirtualKey key, bool isExtendedKey, bool isShiftDown = false)
+        /// <param name="isControlDown">
+        /// Ctrl selects PRD 1.9's undo and redo. Handled before everything else, because Z is
+        /// already Reject and Y is unbound - a Ctrl chord must never fall through and rate the
+        /// photo the user was trying to un-rate.
+        /// </param>
+        public static ResolvedInput Resolve(VirtualKey key, bool isExtendedKey,
+                                            bool isShiftDown = false, bool isControlDown = false)
         {
+            if (isControlDown)
+            {
+                return key switch
+                {
+                    VirtualKey.Z => new ResolvedInput(AppCommand.Undo, 0),
+                    VirtualKey.Y => new ResolvedInput(AppCommand.Redo, 0),
+
+                    // Every other Ctrl chord is swallowed rather than falling through to its
+                    // unmodified meaning. Ctrl+S reaching the rating ladder would be a nasty
+                    // surprise for a hand trained on every other application.
+                    _ => ResolvedInput.None,
+                };
+            }
+
             // Resolved first, before the extended/numpad split below, because every key here
             // means the same thing whichever way that bit falls - so none of them can be
             // shadowed by a numpad twin.

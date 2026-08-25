@@ -244,6 +244,11 @@ namespace Fastcull
                 case nameof(ViewModels.MainViewModel.IsFinishVisible):
                     FinishOverlay.Visibility = vm.IsFinishVisible ? Visibility.Visible : Visibility.Collapsed;
                     break;
+
+                case nameof(ViewModels.MainViewModel.ToastText):
+                    ToastText.Text = vm.ToastText;
+                    Toast.Visibility = vm.ToastVisibility;
+                    break;
             }
         }
 
@@ -507,13 +512,15 @@ namespace Fastcull
         /// this goes to the input source directly. Shift arrives as its own KeyDown first, which
         /// resolves to None and is ignored - only the Space that follows it sees this as true.
         /// </summary>
-        private static bool IsShiftDown()
-        {
-            const Windows.UI.Core.CoreVirtualKeyStates down = Windows.UI.Core.CoreVirtualKeyStates.Down;
+        private static bool IsShiftDown() => IsDown(Windows.System.VirtualKey.Shift);
 
-            return Microsoft.UI.Input.InputKeyboardSource
-                .GetKeyStateForCurrentThread(Windows.System.VirtualKey.Shift).HasFlag(down);
-        }
+        /// <summary>Ctrl, for PRD 1.9's undo and redo.</summary>
+        private static bool IsControlDown() => IsDown(Windows.System.VirtualKey.Control);
+
+        private static bool IsDown(Windows.System.VirtualKey key)
+            => Microsoft.UI.Input.InputKeyboardSource
+                .GetKeyStateForCurrentThread(key)
+                .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
         /// <summary>
         /// Whether a control that wants raw keystrokes currently has focus.
@@ -548,7 +555,7 @@ namespace Fastcull
             // TextBox receives it exactly as it would in any other app.
             if (IsTextEntryFocused()) return;
 
-            var resolved = InputRouter.Resolve(e.Key, e.KeyStatus.IsExtendedKey, IsShiftDown());
+            var resolved = InputRouter.Resolve(e.Key, e.KeyStatus.IsExtendedKey, IsShiftDown(), IsControlDown());
 
             // The finish confirmation is modal (PRD 4.2), so the cull is unreachable while it is
             // up. Escape still works - a modal with no way out is a trap - and it is routed

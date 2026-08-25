@@ -90,6 +90,21 @@
                  would be a way to click past it. -->
             <views:FinishSessionView x:Name="FinishOverlay" Grid.Column="0" Grid.ColumnSpan="2"
                                      Visibility="Collapsed"/>
+
+            <!-- Transient message (PRD 1.9). Bottom-centre and not hit-testable, so it reports a
+                 failed undo without taking a click or covering the filmstrip's controls. Solid
+                 black per PRD 1.10 - a translucent scrim would put non-black chrome on screen. -->
+            <Border x:Name="Toast" Grid.Column="0" Grid.ColumnSpan="2"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="0,0,0,120" Padding="16,9" CornerRadius="4"
+                    IsHitTestVisible="False"
+                    Background="#FF000000"
+                    BorderBrush="{StaticResource Neutral700Brush}" BorderThickness="1"
+                    Visibility="Collapsed">
+                <TextBlock x:Name="ToastText" FontSize="11" MaxWidth="620" TextWrapping="Wrap"
+                           FontFamily="{StaticResource UiFontFamily}"
+                           Foreground="{StaticResource Neutral200Brush}"/>
+            </Border>
         </Grid>
     </Grid>
 </Window>

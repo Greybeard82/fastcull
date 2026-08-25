@@ -30,6 +30,16 @@ namespace Fastcull.ViewModels
         /// <summary>Session position counter for the title bar, e.g. "1204 / 2000".</summary>
         public string PositionText => Items.Count == 0 ? string.Empty : $"{ActiveIndex + 1} / {Items.Count}";
 
+        public MainViewModel()
+        {
+            // PositionText depends on the sequence LENGTH as well as the cursor, and the attribute
+            // above only covers the cursor. Deleting the photo under the cursor leaves ActiveIndex
+            // unchanged, so nothing notified and the counter went on reading "3 / 10" against nine
+            // photos - measured, and a bug that predates the undo work. Watching the collection is
+            // what makes the total honest, and it also covers undo putting a photo back.
+            Items.CollectionChanged += (_, _) => OnPropertyChanged(nameof(PositionText));
+        }
+
         /// <summary>
         /// The photos currently on stage, in display order. Variable length: the stage shows as
         /// many as actually fit (PRD 1.5), which the View decides from the geometry and pushes
@@ -691,6 +701,11 @@ namespace Fastcull.ViewModels
             // The name comes from the store when there is one, so a reopened session shows the
             // name it was given rather than the folder it happens to live in. With no store - a
             // locked or corrupt database - the folder name is still the right answer.
+            // The history closes over items from the previous sequence; undoing one after the
+            // folder changed would write a rating onto a photo that is no longer on screen.
+            _undoStack.Clear();
+            ToastText = string.Empty;
+
             Sidebar.SessionName = _sessionStore?.DisplayName ?? SessionStore.Describe(sessionName, root);
             RefreshSessions();
 
@@ -955,6 +970,13 @@ namespace Fastcull.ViewModels
                 case AppCommand.OpenFolder: Sidebar.RequestChangeFolder(); break;
 
                 case AppCommand.DeletePhoto: DeleteActivePhoto(); break;
+
+                // PRD 1.9. Finish Session is deliberately NOT on this stack - it has its own
+                // confirmation, it is the one action the user is already made to think about, and
+                // a Ctrl+Z that silently un-sorted two thousand photographs would be far more
+                // dangerous than no undo at all.
+                case AppCommand.Undo: ApplyHistory(_undoStack.Undo()); break;
+                case AppCommand.Redo: ApplyHistory(_undoStack.Redo()); break;
             }
         }
 
@@ -1008,14 +1030,32 @@ namespace Fastcull.ViewModels
             var item = ActiveItem;
             if (item is null) return;
 
-            var updated = transition(item.CullState);
-            if (updated == item.CullState) return;
+            var before = item.CullState;
+            var after = transition(before);
+            if (after == before) return;
 
-            item.CullState = updated;
+            SetCullState(item, after);
+
+            // PRD 1.9. Pushed after the change, carrying both values - see RatingCommand for why
+            // it records the prior state rather than a direction.
+            _undoStack.Push(new RatingCommand(item, before, after, SetCullState));
+        }
+
+        /// <summary>
+        /// The single place a photo's cull state is written.
+        ///
+        /// Undo and redo go through here too, which is what makes them indistinguishable from a
+        /// keypress as far as the sidebar tally, the on-photo weight bar and the filmstrip badge
+        /// are concerned. A separate "restore" path would be a second place for those three to be
+        /// updated, and eventually one of them would be forgotten.
+        /// </summary>
+        private void SetCullState(FilmstripItemViewModel item, CullState state)
+        {
+            item.CullState = state;
 
             // Fire-and-forget: QueueRating is a non-blocking TryWrite onto the background
             // writer's channel, so the UI thread never awaits the database (PRD 3.1).
-            _sessionStore?.QueueRating(item.Photo.FilePath, updated);
+            _sessionStore?.QueueRating(item.Photo.FilePath, state);
 
             // Synchronous, so the sidebar's counts change in the same frame as the weight bar
             // under the photo. A tally that lagged the mark it describes would read as a bug.
@@ -1027,6 +1067,90 @@ namespace Fastcull.ViewModels
         /// <summary>Raised after the active item's CullState changes, so persistence can observe it.</summary>
         public event Action<FilmstripItemViewModel>? RatingChanged;
 
+        // ------------------------------------------------------------------
+        // Undo / redo (PRD 1.9)
+        // ------------------------------------------------------------------
+
+        private readonly UndoStack _undoStack = new();
+
+        /// <summary>Exposed for the view and for tests to inspect depth.</summary>
+        public UndoStack History => _undoStack;
+
+        /// <summary>
+        /// Applies the result of an undo or a redo.
+        ///
+        /// **The cursor moves to the photo that changed.** That is a choice: an undo could leave
+        /// the cursor where it is, but the whole point of this feature is the fast one-handed
+        /// workflow, where the mistake being undone is often several photos back. Undoing a rating
+        /// on a photo that is no longer on screen, and showing no sign of it, would look exactly
+        /// like nothing having happened - and would invite a second Ctrl+Z that undoes something
+        /// the user did not mean to touch. Moving the cursor makes the result visible and keeps
+        /// the next keystroke aimed at the photo the user is now looking at.
+        /// </summary>
+        private void ApplyHistory(UndoResult result)
+        {
+            switch (result.Outcome)
+            {
+                case UndoOutcome.NothingToDo:
+                    return;
+
+                case UndoOutcome.Failed:
+                    Toast(result.Message ?? "That action could not be reversed.");
+                    return;
+            }
+
+            // A delete's undo has already placed the cursor as part of re-inserting the photo.
+            if (result.Command is RatingCommand rating)
+            {
+                var index = Items.IndexOf(rating.Item);
+                if (index >= 0) SetActiveIndex(index, force: true);
+            }
+        }
+
+        private string _toastText = string.Empty;
+
+        /// <summary>A short-lived message. Empty when nothing is being said.</summary>
+        public string ToastText
+        {
+            get => _toastText;
+            private set
+            {
+                if (_toastText == value) return;
+                _toastText = value;
+
+                OnPropertyChanged(nameof(ToastText));
+                OnPropertyChanged(nameof(ToastVisibility));
+            }
+        }
+
+        public Visibility ToastVisibility =>
+            string.IsNullOrEmpty(ToastText) ? Visibility.Collapsed : Visibility.Visible;
+
+        private Microsoft.UI.Dispatching.DispatcherQueueTimer? _toastTimer;
+
+        /// <summary>
+        /// Says something briefly, on screen.
+        ///
+        /// Needed because the failures this feature has are ones the user must be told about -
+        /// an undo that cannot restore a purged file has to say so rather than appearing to do
+        /// nothing. Debug.WriteLine is not a user-facing channel.
+        /// </summary>
+        private void Toast(string message)
+        {
+            ToastText = message;
+
+            _toastTimer ??= _dispatcherQueue.CreateTimer();
+            _toastTimer.IsRepeating = false;
+            _toastTimer.Interval = TimeSpan.FromSeconds(6);
+            _toastTimer.Tick -= OnToastElapsed;
+            _toastTimer.Tick += OnToastElapsed;
+
+            _toastTimer.Stop();
+            _toastTimer.Start();
+        }
+
+        private void OnToastElapsed(object? sender, object e) => ToastText = string.Empty;
+
         /// <summary>
         /// PRD 2.1.2: moves the selected photo to the Recycle Bin and drops it from the sequence.
         ///
@@ -1034,8 +1158,8 @@ namespace Fastcull.ViewModels
         /// succeeded - a locked or read-only file must leave the strip exactly as it was, rather
         /// than disappearing from view while surviving on disk.
         ///
-        /// Note this is genuinely destructive and PRD 1.9's undo does not exist, which is why it
-        /// is a Recycle Bin move: Windows' own restore is the only undo there is for it.
+        /// A Recycle Bin move rather than a permanent delete, which is what lets PRD 1.9's undo
+        /// bring it back: the file still exists, and TryRestore puts it where it was.
         /// </summary>
         private void DeleteActivePhoto()
         {
@@ -1045,11 +1169,36 @@ namespace Fastcull.ViewModels
             var index = ActiveIndex;
             if (index < 0 || index >= Items.Count) return;
 
+            var command = new DeleteCommand(item, index, RemovePhoto, ReinsertPhoto);
+
+            if (!command.Execute())
+            {
+                Toast($"Could not delete {item.Photo.FileName}. It is still here.");
+                return;
+            }
+
+            _undoStack.Push(command);
+        }
+
+        /// <summary>
+        /// Recycles the file and takes the photo out of the sequence. The delete half of
+        /// <see cref="DeleteCommand"/>, so it serves the first press and any redo alike.
+        ///
+        /// Returns false without touching the sequence when the file will not go - PRD 2.1.2 is
+        /// explicit that a photo must not vanish from the filmstrip while surviving on disk.
+        /// </summary>
+        private bool RemovePhoto(FilmstripItemViewModel item, int index)
+        {
             if (!RecycleBin.TrySend(item.Photo.FilePath))
             {
                 System.Diagnostics.Debug.WriteLine($"[FastCull] Could not recycle {item.Photo.FilePath}");
-                return;
+                return false;
             }
+
+            // Located rather than assumed: a redo runs against a sequence that has been through an
+            // undo, so the recorded index is a hint, not a fact.
+            var at = Items.IndexOf(item);
+            if (at < 0) return false;
 
             // Release its decodes before it leaves; nothing else will hold a reference afterwards.
             item.IsPinned = false;
@@ -1057,11 +1206,11 @@ namespace Fastcull.ViewModels
             item.CancelLoad();
             item.CancelThumbnailLoad();
 
-            Items.RemoveAt(index);
+            Items.RemoveAt(at);
 
             // Position in the sequence is what PRD 3.3's window and eviction are indexed by, so
             // everything after the hole has to be renumbered before the cursor moves.
-            for (var i = index; i < Items.Count; i++) Items[i].Index = i;
+            for (var i = at; i < Items.Count; i++) Items[i].Index = i;
 
             if (Items.Count == 0)
             {
@@ -1073,7 +1222,7 @@ namespace Fastcull.ViewModels
                 Sidebar.SetActivePhoto(null);
                 RefreshTally();
                 RebuildFolderViews();
-                return;
+                return true;
             }
 
             RefreshTally();
@@ -1083,7 +1232,29 @@ namespace Fastcull.ViewModels
             // run of unwanted frames clears without moving the hand. At the end, step back.
             //
             // force: the index usually has not changed, but the photo at it has.
-            SetActiveIndex(Math.Min(index, Items.Count - 1), force: true);
+            SetActiveIndex(Math.Min(at, Items.Count - 1), force: true);
+            return true;
+        }
+
+        /// <summary>
+        /// Puts a restored photo back at the position it held (PRD 1.9). Called only after the
+        /// file itself has been recovered from the Recycle Bin.
+        ///
+        /// The cursor lands on it, which is deliberate: an undo the user cannot see is
+        /// indistinguishable from an undo that did not happen.
+        /// </summary>
+        private void ReinsertPhoto(FilmstripItemViewModel item, int index)
+        {
+            var at = Math.Clamp(index, 0, Items.Count);
+
+            Items.Insert(at, item);
+            for (var i = at; i < Items.Count; i++) Items[i].Index = i;
+
+            RefreshTally();
+            RebuildFolderViews();
+
+            IsEmpty = false;
+            SetActiveIndex(at, force: true);
         }
 
         /// <summary>Rebuilds the sidebar's format and folder views from the current sequence.</summary>

@@ -62,12 +62,16 @@ public class KeyBindingCatalogTests
             {
                 var plain = InputRouter.Resolve(key, extended, isShiftDown: false);
                 var shifted = InputRouter.Resolve(key, extended, isShiftDown: true);
+                var controlled = InputRouter.Resolve(key, extended, isShiftDown: false, isControlDown: true);
 
                 if (plain.Command != AppCommand.None)
                     yield return new KeyStroke(key, extended, false);
 
                 if (shifted != plain && shifted.Command != AppCommand.None)
                     yield return new KeyStroke(key, extended, true);
+
+                if (controlled != plain && controlled.Command != AppCommand.None)
+                    yield return new KeyStroke(key, extended, false, true);
             }
         }
     }
@@ -116,6 +120,28 @@ public class KeyBindingCatalogTests
 
         Assert.Contains(VirtualKey.Left, shownKeys);
         Assert.Contains(VirtualKey.Down, shownKeys);
+    }
+
+    [Fact]
+    public void UndoAndRedoAppearInTheOverlay()
+    {
+        // Checked rather than assumed. The catalog enumerates the router, but it only did so for
+        // Shift until PRD 1.9 added a Ctrl chord - a modifier it did not enumerate would have been
+        // invisible here no matter how correctly it was bound.
+        var rows = AllRows().ToList();
+
+        Assert.Contains(rows, r => r.Keys.Contains("Ctrl + Z") && r.Description == "Undo");
+        Assert.Contains(rows, r => r.Keys.Contains("Ctrl + Y") && r.Description == "Redo");
+    }
+
+    [Fact]
+    public void ThePlainZRowIsStillRejectAndNotUndo()
+    {
+        var rows = AllRows().ToList();
+
+        var reject = rows.Single(r => r.Description == "Reject");
+        Assert.Contains("Z", reject.Keys);
+        Assert.DoesNotContain("Ctrl", reject.Keys);
     }
 
     [Fact]

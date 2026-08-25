@@ -6,7 +6,8 @@ using Windows.System;
 namespace Fastcull.Input
 {
     /// <summary>One physical keystroke, as the router sees it.</summary>
-    public readonly record struct KeyStroke(VirtualKey Key, bool IsExtendedKey, bool IsShiftDown);
+    public readonly record struct KeyStroke(
+        VirtualKey Key, bool IsExtendedKey, bool IsShiftDown, bool IsControlDown = false);
 
     /// <summary>A single line of the help overlay: the keys, and what they do.</summary>
     public sealed record KeyBindingRow(string Keys, string Description);
@@ -79,6 +80,9 @@ namespace Fastcull.Input
             [AppCommand.ToggleSidebarPin] = "Pin / unpin sidebar",
             [AppCommand.ToggleHelp] = "This help",
 
+            [AppCommand.Undo] = "Undo",
+            [AppCommand.Redo] = "Redo",
+
             [AppCommand.OpenFolder] = "Open a folder",
         };
 
@@ -92,6 +96,8 @@ namespace Fastcull.Input
 
             ("Rate - jump", [AppCommand.SetRejected, AppCommand.SetUnflagged,
                              AppCommand.SetPicked, AppCommand.SetStars]),
+
+            ("History", [AppCommand.Undo, AppCommand.Redo]),
 
             ("Photo", [AppCommand.RotateLeft, AppCommand.RotateRight, AppCommand.DeletePhoto]),
 
@@ -115,20 +121,23 @@ namespace Fastcull.Input
                 {
                     var plain = InputRouter.Resolve(key, extended, isShiftDown: false);
                     var shifted = InputRouter.Resolve(key, extended, isShiftDown: true);
+                    var controlled = InputRouter.Resolve(key, extended, isShiftDown: false, isControlDown: true);
 
-                    Record(key, extended, isShiftDown: false, plain);
+                    Record(key, extended, false, false, plain);
 
-                    // Only when Shift actually changes the outcome. Every other key resolves the
-                    // same with Shift held, and listing "Shift+W" alongside "W" would be noise.
-                    if (shifted != plain) Record(key, extended, isShiftDown: true, shifted);
+                    // Only when a modifier actually changes the outcome. Every other key resolves
+                    // the same with Shift or Ctrl held, and listing "Shift+W" alongside "W" would
+                    // be noise.
+                    if (shifted != plain) Record(key, extended, true, false, shifted);
+                    if (controlled != plain) Record(key, extended, false, true, controlled);
                 }
             }
 
-            void Record(VirtualKey key, bool extended, bool isShiftDown, ResolvedInput resolved)
+            void Record(VirtualKey key, bool extended, bool isShiftDown, bool isControlDown, ResolvedInput resolved)
             {
                 if (resolved.Command == AppCommand.None) return;
 
-                var stroke = new KeyStroke(key, extended, isShiftDown);
+                var stroke = new KeyStroke(key, extended, isShiftDown, isControlDown);
 
                 // The NumLock-off twins only ever appear with the extended bit clear; the same
                 // keycodes WITH the bit set are the genuine grey navigation keys and must show.
@@ -144,7 +153,7 @@ namespace Fastcull.Input
                     ? existing
                     : strokesByCommand[resolved.Command] = [];
 
-                if (list.Any(s => s.Key == key && s.IsShiftDown == isShiftDown)) return;
+                if (list.Any(s => s.Key == key && s.IsShiftDown == isShiftDown && s.IsControlDown == isControlDown)) return;
 
                 list.Add(stroke);
                 displayed.Add(stroke);
@@ -197,7 +206,10 @@ namespace Fastcull.Input
                 _ => stroke.Key.ToString(),
             };
 
-            return stroke.IsShiftDown ? "Shift + " + name : name;
+            if (stroke.IsControlDown) name = "Ctrl + " + name;
+            if (stroke.IsShiftDown) name = "Shift + " + name;
+
+            return name;
         }
     }
 }

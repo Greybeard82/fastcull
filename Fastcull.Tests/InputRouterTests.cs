@@ -303,6 +303,67 @@ public class InputRouterTests
             InputRouter.Resolve(VirtualKey.Space, false, isShiftDown: false),
             InputRouter.Resolve(VirtualKey.Space, false));
 
+    // ---- Ctrl: undo and redo (PRD 1.9) ----
+
+    [Fact]
+    public void CtrlZUndoesAndCtrlYRedoes()
+    {
+        foreach (var extended in new[] { true, false })
+        {
+            Assert.Equal(AppCommand.Undo,
+                InputRouter.Resolve(VirtualKey.Z, extended, isControlDown: true).Command);
+            Assert.Equal(AppCommand.Redo,
+                InputRouter.Resolve(VirtualKey.Y, extended, isControlDown: true).Command);
+        }
+    }
+
+    [Fact]
+    public void CtrlZIsNotReject()
+    {
+        // Z alone is Reject. If the Ctrl chord fell through to it, the keystroke meant to take a
+        // rating back would apply the very rating being undone.
+        Assert.Equal(AppCommand.SetRejected, InputRouter.Resolve(VirtualKey.Z, false).Command);
+        Assert.NotEqual(AppCommand.SetRejected,
+            InputRouter.Resolve(VirtualKey.Z, false, isControlDown: true).Command);
+    }
+
+    [Fact]
+    public void EveryOtherCtrlChordIsSwallowed()
+    {
+        // Ctrl+S reaching the rating ladder would be a nasty surprise for a hand trained on every
+        // other application.
+        foreach (var key in System.Enum.GetValues<VirtualKey>())
+        {
+            if (key is VirtualKey.Z or VirtualKey.Y) continue;
+
+            foreach (var extended in new[] { true, false })
+                Assert.Equal(AppCommand.None,
+                    InputRouter.Resolve(key, extended, isControlDown: true).Command);
+        }
+    }
+
+    [Fact]
+    public void CtrlBeatsShiftOnTheSameKey()
+        => Assert.Equal(AppCommand.Undo,
+            InputRouter.Resolve(VirtualKey.Z, false, isShiftDown: true, isControlDown: true).Command);
+
+    [Fact]
+    public void WithoutCtrlNothingResolvesToUndoOrRedo()
+    {
+        foreach (var key in System.Enum.GetValues<VirtualKey>())
+        {
+            foreach (var extended in new[] { true, false })
+            {
+                foreach (var shift in new[] { true, false })
+                {
+                    var command = InputRouter.Resolve(key, extended, shift).Command;
+                    Assert.NotEqual(AppCommand.Undo, command);
+                    Assert.NotEqual(AppCommand.Redo, command);
+                }
+            }
+        }
+    }
+
     // ---- Sidebar pin and help ----
 
     [Fact]

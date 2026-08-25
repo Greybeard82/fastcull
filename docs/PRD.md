@@ -398,10 +398,29 @@ Resolving a place name from GPS coordinates is the **first and currently only** 
 
 If reverse geocoding ever needs to become more than this — batch prefetching, a paid provider, a persistent on-disk cache — that is a decision to take explicitly, not to drift into.
 
-### 1.9 Undo
-- `Ctrl+Z` / `Ctrl+Y` over a command stack of at least 200 entries.
-- Covers flag changes, star changes, and Recycle Bin deletes (restored via the shell API).
-- Does not cover the Finish Session batch operation, which has its own confirmation and log.
+### 1.9 Undo — built
+
+`Ctrl+Z` / `Ctrl+Y` over a command stack of **256** entries — PRD's floor was 200, and the extra is one object reference each against a workflow where the mistake being undone is often several dozen keypresses back. `UndoStack` refuses to be constructed below 200 so the floor cannot be lowered by accident.
+
+**A command pattern, not state snapshots.** Each undoable action is an object with `Execute` and `Undo`; redo is `Execute` again. A list plus a cursor rather than two stacks, so "a new action discards the redo branch" is a truncation instead of a second collection to keep in step.
+
+**Covered:** flag changes (`Z`/`X`/`C`), ladder steps (`W`/`S`, `Up`/`Down`), star changes (`1`–`5`), and Recycle Bin deletes.
+
+**Rating undo restores the exact prior `CullState`, not one step back.** This is the whole difference between working and not: undoing `Z` on a photo that was at three stars has to put back three stars, and "one rung up the ladder" would put back `Unflagged`. Each command carries the pair of values it moved between, so it is also correct for a photo whose rating was changed several times.
+
+Undo and redo write through the same `SetCullState` a keypress does, which is what keeps the sidebar tally, the on-photo weight bar and the filmstrip badge in step. A separate restore path would be a second place those three had to be updated, and one of them would eventually be missed.
+
+**Delete undo restores the file from the Recycle Bin** and puts the photo back at its original index. The restore is attempted *before* the sequence is touched: re-inserting a photo whose file did not come back would leave a filmstrip row pointing at nothing, which is the mirror of the failure §2.1.2 already forbids in the other direction.
+
+The Recycle Bin's restore verb is **localised** — this machine reports it in Spanish — so there is no single string to invoke. The implementation matches against an allow-list of known names and confirms success by checking the file is actually back, the same outcome-based check `TrySend` uses. Iterating the item's verbs and trying each until something worked would be shorter and must not be done: one of those verbs is Delete, and invoking it would destroy the photograph the user is trying to recover.
+
+**Failures are reported, not thrown.** A photo purged from the Recycle Bin cannot be restored; the stack says so on screen and *drops* that command rather than leaving it at the top refusing to move, which would block every earlier action behind it and read as "undo is broken" rather than "that one thing cannot be undone".
+
+**The cursor moves to the photo that changed.** A choice, and the reason is the workflow: undoing a rating on a photo that has scrolled off screen, with nothing to show for it, looks exactly like nothing having happened — and invites a second `Ctrl+Z` that undoes something the user did not mean to touch.
+
+**The history is cleared when the folder changes.** The commands close over items from the previous sequence, and undoing one afterwards would write a rating onto a photo that is no longer on screen.
+
+**Does not cover the Finish Session batch operation**, which has its own confirmation and its own log (§4.2). That exclusion is deliberate rather than unfinished: a `Ctrl+Z` that silently un-sorted two thousand photographs would be considerably more dangerous than having no undo at all.
 
 ### 1.10 Visual theme (OLED black)
 
