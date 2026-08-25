@@ -26,6 +26,26 @@ namespace Fastcull.Services
         Move,
     }
 
+    /// <summary>
+    /// Whether the bucket keeps the source's subfolder layout (PRD 4.2.2).
+    ///
+    /// <see cref="Flat"/> makes name collisions markedly more likely rather than merely possible:
+    /// preserving the layout means two cards' DSC_0001.ARW land in different subfolders and never
+    /// meet, while flattening puts them in the same directory by design. That does not make it
+    /// unsafe - the collision-safe rename and CreateNew in <see cref="FinishExecutor"/> are what
+    /// guarantee nothing is overwritten, and they are indexed on the destination path, so they
+    /// apply here unchanged. It does make the renames common instead of rare, which is why every
+    /// one of them is written to the run log.
+    /// </summary>
+    public enum FinishStructure
+    {
+        /// <summary>Default. The path relative to the scan root is preserved inside the bucket.</summary>
+        Preserve,
+
+        /// <summary>Every photo lands directly in the bucket root; source subfolders are discarded.</summary>
+        Flat,
+    }
+
     /// <summary>One photo's fate.</summary>
     /// <param name="SourcePath">Absolute path today.</param>
     /// <param name="RelativePath">Path relative to the scan root, preserved inside the bucket.</param>
@@ -47,6 +67,9 @@ namespace Fastcull.Services
         public required string SourceRoot { get; init; }
         public required FinishOperation Operation { get; init; }
         public required IReadOnlyList<FinishPlanEntry> Entries { get; init; }
+
+        /// <summary>Whether destinations preserve the source layout or flatten it (PRD 4.2.2).</summary>
+        public FinishStructure Structure { get; init; } = FinishStructure.Preserve;
 
         /// <summary>Everything that would actually be written somewhere - untouched excluded.</summary>
         public IEnumerable<FinishPlanEntry> Moves => Entries.Where(e => e.Bucket != FinishBucket.Untouched);
@@ -134,14 +157,20 @@ namespace Fastcull.Services
         /// Builds the plan. <paramref name="photos"/> supplies each photo's absolute path, its path
         /// relative to the scan root, and its cull state.
         ///
-        /// The relative path is preserved inside the bucket, per PRD 4.4's collision policy: two
-        /// cards can both hold DSC_0001.ARW, and flattening them into one folder would have one
-        /// silently overwrite the other.
+        /// <paramref name="structure"/> decides the shape inside the bucket (PRD 4.2.2). Preserving
+        /// the relative path is the default and the safer of the two: two cards can both hold
+        /// DSC_0001.ARW, and under Preserve they land in different subfolders and never meet.
+        /// Flattening deliberately puts them in one directory, where the executor's collision-safe
+        /// rename is what keeps the second from landing on the first. Neither mode ever overwrites;
+        /// Flat simply exercises the rename far more often.
+        ///
+        /// Defaulted to Preserve so existing callers keep the behaviour they were written against.
         /// </summary>
         public static FinishPlan Plan(
             string sourceRoot,
             FinishOperation operation,
-            IEnumerable<(string AbsolutePath, string RelativePath, CullState State)> photos)
+            IEnumerable<(string AbsolutePath, string RelativePath, CullState State)> photos,
+            FinishStructure structure = FinishStructure.Preserve)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(sourceRoot);
             ArgumentNullException.ThrowIfNull(photos);
@@ -154,18 +183,26 @@ namespace Fastcull.Services
                 var stars = bucket == FinishBucket.Rated ? state.Stars : 0;
                 var folder = BucketFolder(bucket, stars);
 
+                // Flat keeps the file name and discards everything above it. GetFileName copes with
+                // either separator, so a relative path that arrived with forward slashes flattens
+                // the same as one that did not.
+                var withinBucket = structure == FinishStructure.Flat
+                    ? Path.GetFileName(relative)
+                    : relative;
+
                 entries.Add(new FinishPlanEntry(
                     absolute,
                     relative,
                     bucket,
                     stars,
-                    folder is null ? null : Path.Combine(sourceRoot, folder, relative)));
+                    folder is null ? null : Path.Combine(sourceRoot, folder, withinBucket)));
             }
 
             return new FinishPlan
             {
                 SourceRoot = sourceRoot,
                 Operation = operation,
+                Structure = structure,
                 Entries = entries,
             };
         }
@@ -190,6 +227,7 @@ namespace Fastcull.Services
             sb.AppendLine($"Generated   : {timestamp:yyyy-MM-dd HH:mm:ss zzz}");
             sb.AppendLine($"Source root : {plan.SourceRoot}");
             sb.AppendLine($"Operation   : {plan.Operation.ToString().ToUpperInvariant()}");
+            sb.AppendLine($"Structure   : {(plan.Structure == FinishStructure.Flat ? "FLAT (subfolders discarded)" : "PRESERVED (source layout kept)")}");
             sb.AppendLine();
 
             sb.AppendLine("SUMMARY");

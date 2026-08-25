@@ -496,6 +496,8 @@ The organising idea is that the two axes a cull actually uses — **which photo*
 | `1`–`5` / `NumPad1`–`NumPad5` | Set stars directly (implies `Picked`) |
 | `Left` / `Right` | Previous / next photo — arrow-key equivalents of `A` / `D` |
 | `Up` / `Down` | Rate up / down — arrow-key equivalents of `W` / `S` |
+| `Ctrl`+`Left` / `Ctrl`+`Right` | Jump **10 photos** back / forward, clamped at the ends (§2.1.4) |
+| `Ctrl`+`Z` / `Ctrl`+`Y` | Undo / redo (§1.9) |
 | `I` | Toggle the info overlay — synonym of `F`, retained |
 
 **`W`/`S` and `Up`/`Down` are the same action, not two similar ones.** Both resolve to the identical command and call `CullState.Up()` / `CullState.Down()`. `W`/`S` is a same-hand duplicate of the arrows, added so the ladder can be driven without moving off `WASD`; it is not a second rating behaviour and must never diverge from the arrows. The same holds for `A`/`D` against `Left`/`Right`, and `F` against `I`.
@@ -563,6 +565,17 @@ One layer per press is the whole design. Escaping out of a zoomed photo inside s
 
 **The one loss that remains:** there is still no way to strip stars from a photo while keeping it `Picked`. `C` does it by resetting to rung 2, which is the same end state, so this only matters if "picked, no stars" and "picked, stars cleared" ever need to be distinguished — today they do not.
 
+**`Ctrl` chords.** `Ctrl` is resolved *before* the main map and never falls through to a key's unmodified meaning. Four chords are bound; every other one is swallowed outright, so `Ctrl`+`S` can never reach the rating ladder.
+
+| Chord | Action |
+| :--- | :--- |
+| `Ctrl`+`Z` | Undo (§1.9) |
+| `Ctrl`+`Y` | Redo (§1.9) |
+| `Ctrl`+`Left` | Back 10 photos (§2.1.4) |
+| `Ctrl`+`Right` | Forward 10 photos (§2.1.4) |
+
+`Ctrl`+`Z` must not fall through to bare `Z`, which is Reject: the keystroke meant to take a rating back would otherwise apply the very rating being undone.
+
 #### 2.1.2 Delete
 
 `Delete` moves the selected photo to the **Recycle Bin** — a recoverable delete, never a permanent one.
@@ -570,8 +583,10 @@ One layer per press is the whole design. Escaping out of a zoomed photo inside s
 - The cursor stays at the same position in the sequence, which is now the photo that followed the deleted one, so a run of unwanted frames can be cleared without moving the hand. At the end of the sequence it steps back to the new last photo.
 - The remaining photos are renumbered, because position in the sequence is what §3.3's prefetch window and eviction are indexed by.
 - **A file that cannot be deleted — locked, read-only, on a disconnected volume — leaves the sequence untouched.** The photo stays where it is rather than vanishing from the strip while surviving on disk.
+- **A refused delete says so.** The reason `SHFileOperation` gave — a sharing violation, access denied, a bad path — is shown to the user rather than written to a debug channel nobody is attached to. A silent return is indistinguishable from the key not being wired up at all, which is precisely how a *different* defect got reported as "Delete is broken" (§4.5.1).
+- **Deleting the last photo in the sequence leaves the empty state**, with the stage hidden and the empty-state message shown, rather than an empty stage over a sequence of zero.
 
-**Undo does not cover this.** §1.9's undo stack is unbuilt, so within the app the deletion is final; recovery is through the Windows Recycle Bin. That gap is the reason this is a Recycle Bin move and not a permanent delete, and it is why the Recycle Bin's own restore is currently the only undo that exists.
+**Undo covers this.** §1.9's stack is built, and `Ctrl`+`Z` restores a deleted photo by pulling it back out of the Recycle Bin and reinserting it at the position it held. That recovery is only possible because this is a Recycle Bin move and not a permanent delete — the file still exists to be restored. The Windows Recycle Bin's own restore remains available as the outer safety net.
 
 **Companion grouping does not apply yet.** §1.4's RAW+JPEG pairing is unimplemented, so `Delete` removes exactly the selected file. On a card where a RAW and its JPEG are separate sequence entries, each must be deleted separately — the PRD's original "move file **group**" wording describes the intended behaviour once pairing exists, not what ships today.
 
@@ -591,6 +606,15 @@ The only deliberately hidden keys are the five numpad digits as they arrive with
 **Non-blocking, not modal.** The overlay takes no pointer input (`IsHitTestVisible="False"`) and swallows no keys — keyboard is handled at window level and never reaches it. Everything underneath keeps working while it is open, which is the point: the reason to look a binding up is to then press it, and a modal list would have to be dismissed first.
 
 Per §1.10 the card is **solid** `#FF000000` with a hairline border, not a translucent scrim — a dimmed photo showing through would put non-black, non-photograph pixels on screen.
+
+#### 2.1.4 Coarse navigation — `Ctrl`+`Left` / `Ctrl`+`Right`
+
+Ten photos per press, in the direction of the arrow.
+
+- **Clamped, never wrapped.** A jump from photo 3 lands on the first, and a jump within ten of the end lands on the last. This is the same rule the single-step arrows already follow, and it comes from the same clamp inside `SetActiveIndex` rather than from a second implementation. Wrapping would let a held key cycle a shoot indefinitely with nothing to signal that the end had gone past.
+- **Ten is a filmstrip's worth** — far enough that holding `A` or `D` is the slower way to cross a long shoot, near enough that the landing point is still somewhere the eye recognises. The distance is a single named constant (`InputRouter.JumpSize`), and the help overlay reads its wording from it, so the number cannot be changed in one place and stated wrongly in the other.
+- **Grey arrows only.** With NumLock off, numpad `4` and `6` arrive as `Left` and `Right` with the extended-key bit clear; those are digits, and `Ctrl`+numpad`4` does not jump. This is the same NumLock split §2.1 already depends on.
+- Moves the cursor and nothing else — no rating changes, exactly as with every other navigation key.
 
 ### 2.2 Zoom Mode
 
@@ -861,11 +885,32 @@ Note that **Approved is not "picked plus anything starred"**, which is what an e
 
 **Escape closes the confirmation** without finishing anything, joining §2.1.1's dismiss order ahead of the help overlay.
 
-#### 4.2.1 Stage 1 — plan only, no file operations
+#### 4.2.1 Stage 1 — plan only, no file operations *(superseded)*
 
-The first implementation builds the whole flow and, on **Confirm**, **writes the plan it would execute to a log and moves nothing**. Every photo is enumerated, its destination computed by §4.3's rules, and the result written to `%LOCALAPPDATA%\FastCull\logs\finish-plan-{timestamp}.log`.
+**Historical.** The first implementation built the whole flow and, on **Confirm**, wrote the plan it would execute to `%LOCALAPPDATA%\FastCull\logs\finish-plan-{timestamp}.log` and moved nothing. It existed so the bucketing could be checked against real folders before any code was capable of touching a photograph.
 
-This exists so the bucketing can be checked against real folders before any code is capable of touching a photograph. The confirmation screen says plainly that this is a dry run, so the state is never ambiguous to the person clicking Confirm.
+Stage 2 (§4.4) is built, so **Confirm now performs the operation.** The planner and its dry-run renderer remain — the plan is still what the engine executes, and `FinishPlanner.Render` is still what the log is made of.
+
+#### 4.2.2 Folder structure — preserved or flat
+
+A second required-looking choice sits below Move/Copy, deciding the shape *inside* each bucket.
+
+| Option | Destination for `Card2/DSC_0001.ARW`, picked |
+| :--- | :--- |
+| **Preserve** (default) | `{root}/Approved/Card2/DSC_0001.ARW` |
+| **Flat** | `{root}/Approved/DSC_0001.ARW` |
+
+**Flat discards the source layout, not the destination one.** The bucket and star folders of §4.3 are unaffected — a 3-star photo still lands in `/Rated/3`, just without the subfolders it came from. Unrated photos have no destination to flatten and stay where they are as always.
+
+**This one has a default, and Move/Copy does not.** The asymmetry is deliberate. Move-versus-Copy is destructive-versus-not, so the app must not choose. Preserve-versus-Flat is not a safety question in the same way: neither can lose a file, and Preserve is simply the option that cannot *create* a collision that would not have occurred regardless. So Preserve starts selected, and it resets to Preserve every time the screen opens — a remembered Flat would be a default wearing a disguise, and this choice changes where every single file lands.
+
+**Flat makes collisions common rather than exceptional, and that is its whole cost.** Two cards each holding `DSC_0001.ARW` never meet under Preserve; under Flat they are aimed at one path by design. The guarantees of §4.4 are what absorb this, unchanged:
+
+- The collision-safe rename (`_1`, `_2`, …) is keyed on the **destination path**, so it applies identically in both modes.
+- Every copy opens its destination with `FileMode.CreateNew`, so an overwrite is impossible at the OS level and not merely avoided by a prior existence check.
+- **Every rename is written to the run log**, and the log names which structure produced it — a Flat run can legitimately rename dozens of files, and a reader who did not know the mode would read that as a fault.
+
+**Nothing is ever overwritten in either mode.** Flat only exercises the rename far more often.
 
 ### 4.3 Destination structure and bucketing
 
@@ -882,6 +927,8 @@ Destinations are **relative to the scan root**, not to a separately chosen targe
 ```
 
 Sorting in place under the source root, rather than into a target the user picks, is what makes a second Finish Session on a reopened session (§4.1) coherent: the already-sorted photos are inside the same tree, out of the scan's way, and the folder remains one self-contained job.
+
+**Within a bucket**, the photo's path relative to the scan root is preserved by default and discarded under Flat — §4.2.2. The bucket folders above are the same either way.
 
 **Precedence — stars win over Approved:**
 
@@ -940,7 +987,30 @@ Relative paths are preserved inside each bucket (§4.3), which removes most coll
 
 - **Companion files do not travel together yet.** §1.4's RAW+JPEG pairing is unimplemented, so each file is moved on its own. The PRD's original "the group moves or nothing moves" describes the intended behaviour once pairing exists.
 
-### 4.5 XMP Sidecars (deferred, not cancelled)
+### 4.5 After the run — returning to the session
+
+**When a run ends cleanly, the confirmation closes and the session comes back.** The folder is re-scanned from disk and the sequence rebuilt, so what is on screen is what is genuinely still in the folder — §4.1's "a reopened session is what is still here", made true immediately rather than at the next launch.
+
+| Operation | What the returned session shows |
+| :--- | :--- |
+| **Move** | Only the photos left behind — the unrated ones, still awaiting a decision. The sorted photos have physically left the scan's reach (§4.4's bucket exclusion). |
+| **Copy** | Everything, unchanged. Nothing left the folder, which is exactly what "originals stay" means. |
+
+The outcome is reported as a toast rather than a card, since the card is gone; the run log (§4.4) holds the detail either way.
+
+**A run with failures keeps the confirmation on screen.** The list of what did not go is the one thing the user has to read, and a toast is the wrong place for it. That screen is dismissed with `Esc` or **Cancel**.
+
+**Confirm is disabled once a result is showing.** The idle controls reappear when a run ends — the progress section is simply the inverse of the idle one — so without this a live **Confirm** would sit directly under "Done" and a second press would run the entire batch again. Cancel and reopen to run it again.
+
+#### 4.5.1 Why this section exists: the "Delete is broken" defect
+
+Worth recording, because the visible symptom was three layers away from the cause.
+
+Returning to the session was originally conditional on `report.DoneCount > 0 && report.Operation == Move`. Every other ending — **a Copy**, or a Move with nothing to do — left the confirmation open. The confirmation is modal (§4.2), and the window-level guard swallows every command except `Esc` while it is up. So after any Copy the entire keyboard was dead, and `Delete` was simply the first key the user happened to press.
+
+It was reported as "the Delete key doesn't work". Instrumenting the input path showed `Delete` resolving correctly to `DeletePhoto` and then being dropped by the modal guard — while eight other scenarios (RAW files, mid-decode, zoomed, rapid repeats) all deleted normally. The lesson is the general one: **a modal that can outlive its own reason for existing turns into an input trap**, and the trap gets reported as whichever unrelated key the user reached for first.
+
+### 4.6 XMP Sidecars (deferred, not cancelled)
 Writing `xmp:Rating` and `xmp:Label` sidecars in place would let Lightroom Classic read ratings without moving a single byte. Out of scope for v1.0 by decision. `XmpWriter` exists as a stubbed interface so adding it later is an afternoon rather than a refactor.
 
 ---

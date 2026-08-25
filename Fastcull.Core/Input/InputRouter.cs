@@ -62,6 +62,13 @@ namespace Fastcull.Input
         /// <summary>PRD 1.9's undo stack. Ctrl+Z / Ctrl+Y.</summary>
         Undo,
         Redo,
+
+        /// <summary>
+        /// PRD 2.1.1's coarse navigation: Ctrl + Left / Right, ten photos at a time. Clamps at
+        /// the ends rather than wrapping - see <see cref="InputRouter.JumpSize"/>.
+        /// </summary>
+        JumpBackward,
+        JumpForward,
     }
 
     public readonly record struct ResolvedInput(AppCommand Command, int Payload)
@@ -92,6 +99,13 @@ namespace Fastcull.Input
     /// </summary>
     public static class InputRouter
     {
+        /// <summary>
+        /// How far Ctrl + Left / Right travels (PRD 2.1.1). Ten is a filmstrip's worth: far enough
+        /// that holding A or D is the slower way to cross a long shoot, small enough that the
+        /// landing point is still somewhere the eye recognises.
+        /// </summary>
+        public const int JumpSize = 10;
+
         /// <param name="isShiftDown">
         /// Shift changes exactly one binding today: Space, which zooms on its own and toggles
         /// standalone fullscreen with Shift (PRD 1.7.3). It is defaulted so the large existing
@@ -111,6 +125,12 @@ namespace Fastcull.Input
                 {
                     VirtualKey.Z => new ResolvedInput(AppCommand.Undo, 0),
                     VirtualKey.Y => new ResolvedInput(AppCommand.Redo, 0),
+
+                    // Ten photos at a time (PRD 2.1.1). The extended-key test is the same NumLock
+                    // contract point 2 above describes: with NumLock off, numpad 4 and 6 arrive as
+                    // Left and Right with the bit clear, and Ctrl + numpad 4 must not jump.
+                    VirtualKey.Left when isExtendedKey => new ResolvedInput(AppCommand.JumpBackward, 0),
+                    VirtualKey.Right when isExtendedKey => new ResolvedInput(AppCommand.JumpForward, 0),
 
                     // Every other Ctrl chord is swallowed rather than falling through to its
                     // unmodified meaning. Ctrl+S reaching the rating ladder would be a nasty

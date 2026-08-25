@@ -60,6 +60,8 @@ namespace Fastcull.Input
             [AppCommand.NavigateNext] = "Next photo",
             [AppCommand.NavigateFirst] = "Jump to first",
             [AppCommand.NavigateLast] = "Jump to last",
+            [AppCommand.JumpBackward] = $"Back {InputRouter.JumpSize} photos",
+            [AppCommand.JumpForward] = $"Forward {InputRouter.JumpSize} photos",
 
             [AppCommand.LadderUp] = "Rate up one rung",
             [AppCommand.LadderDown] = "Rate down one rung",
@@ -90,6 +92,7 @@ namespace Fastcull.Input
         private static readonly (string Title, AppCommand[] Commands)[] Layout =
         [
             ("Move", [AppCommand.NavigatePrevious, AppCommand.NavigateNext,
+                      AppCommand.JumpBackward, AppCommand.JumpForward,
                       AppCommand.NavigateFirst, AppCommand.NavigateLast]),
 
             ("Rate - step", [AppCommand.LadderUp, AppCommand.LadderDown]),

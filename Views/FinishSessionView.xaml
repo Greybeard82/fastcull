@@ -159,6 +159,46 @@
                     </Button>
                 </Grid>
 
+                <!-- ===================== Folder structure ===================== -->
+                <!-- PRD 4.2.2. This one has a default, unlike Move/Copy: Preserve cannot create a
+                     collision that would not have happened anyway, and Flat can, so the safer of
+                     the two is the one already selected. Nothing is ever overwritten in either
+                     mode - a name clash is renamed and logged. -->
+                <TextBlock Text="FOLDER STRUCTURE" FontSize="9" CharacterSpacing="160"
+                           Margin="0,24,0,10"
+                           Visibility="{x:Bind ViewModel.FinishIdleVisibility, Mode=OneWay}"
+                           Foreground="{StaticResource Neutral700Brush}"/>
+
+                <Grid ColumnDefinitions="*,*" ColumnSpacing="10"
+                      Visibility="{x:Bind ViewModel.FinishIdleVisibility, Mode=OneWay}">
+                    <Button x:Name="PreserveButton" Grid.Column="0" Click="Preserve_Click" IsTabStop="False"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Padding="12,9" Background="Transparent"
+                            BorderBrush="{x:Bind ViewModel.PreserveBorderBrush, Mode=OneWay}"
+                            BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="PRESERVE" FontSize="10" CharacterSpacing="140"
+                                       Foreground="{x:Bind ViewModel.PreserveTextBrush, Mode=OneWay}"/>
+                            <TextBlock Text="Subfolders kept" FontSize="9" Margin="0,3,0,0"
+                                       Foreground="{StaticResource Neutral700Brush}"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button x:Name="FlatButton" Grid.Column="1" Click="Flat_Click" IsTabStop="False"
+                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                            Padding="12,9" Background="Transparent"
+                            BorderBrush="{x:Bind ViewModel.FlatBorderBrush, Mode=OneWay}"
+                            BorderThickness="1">
+                        <StackPanel>
+                            <TextBlock Text="FLAT" FontSize="10" CharacterSpacing="140"
+                                       Foreground="{x:Bind ViewModel.FlatTextBrush, Mode=OneWay}"/>
+                            <TextBlock Text="All in one folder — same names renamed" FontSize="9" Margin="0,3,0,0"
+                                       TextWrapping="Wrap"
+                                       Foreground="{StaticResource Neutral700Brush}"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
                 <!-- ===================== Progress (while running) ===================== -->
                 <StackPanel Margin="0,24,0,0" Spacing="8"
                             Visibility="{x:Bind ViewModel.FinishRunningVisibility, Mode=OneWay}">

@@ -42,6 +42,14 @@ namespace Fastcull.Views
         private void Move_Click(object sender, RoutedEventArgs e)
             => ViewModel.FinishOperation = FinishOperation.Move;
 
+        // PRD 4.2.2's layout choice. Preserve is already selected when the screen opens, so unlike
+        // Move/Copy these two never sit in a "nothing chosen" state.
+        private void Preserve_Click(object sender, RoutedEventArgs e)
+            => ViewModel.FinishStructure = FinishStructure.Preserve;
+
+        private void Flat_Click(object sender, RoutedEventArgs e)
+            => ViewModel.FinishStructure = FinishStructure.Flat;
+
         private void Cancel_Click(object sender, RoutedEventArgs e) => ViewModel.CancelFinish();
 
         /// <summary>

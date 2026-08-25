@@ -276,4 +276,104 @@ public class FinishPlannerTests
         // Path.GetFileName(@"E:\") is empty, which would render a blank entry in the dropdown.
         Assert.False(string.IsNullOrWhiteSpace(SessionStore.Describe(null, @"E:\")));
     }
+
+    // ---- PRD 4.2.2: flat vs preserved ----
+
+    private static FinishPlan PlanOf(FinishStructure structure, params (string Rel, CullState State)[] photos)
+        => FinishPlanner.Plan(
+            Root,
+            FinishOperation.Move,
+            photos.Select(p => (Path.Combine(Root, p.Rel), p.Rel, p.State)),
+            structure);
+
+    [Fact]
+    public void PreserveIsTheDefault()
+    {
+        // The three-argument overload is what every existing caller uses; it must keep meaning what
+        // it meant before the structure parameter existed.
+        var plan = PlanOf((@"Day1\DSC_0001.ARW", new CullState(Flag.Picked, 0)));
+
+        Assert.Equal(FinishStructure.Preserve, plan.Structure);
+        Assert.Equal(Path.Combine(Root, "Approved", "Day1", "DSC_0001.ARW"),
+            plan.Entries[0].DestinationPath);
+    }
+
+    [Fact]
+    public void FlatDropsTheSubfolders()
+    {
+        var plan = PlanOf(FinishStructure.Flat,
+            (@"Day1\DSC_0001.ARW", new CullState(Flag.Picked, 0)));
+
+        Assert.Equal(FinishStructure.Flat, plan.Structure);
+        Assert.Equal(Path.Combine(Root, "Approved", "DSC_0001.ARW"),
+            plan.Entries[0].DestinationPath);
+    }
+
+    [Fact]
+    public void FlatKeepsTheBucketAndStarFolders()
+    {
+        // Flattening discards the SOURCE layout, not the destination one. A 3-star photo still
+        // belongs in Rated\3 - otherwise the whole point of the buckets is lost.
+        var plan = PlanOf(FinishStructure.Flat,
+            (@"Card2\Sub\DSC_9.ARW", new CullState(Flag.Picked, 3)));
+
+        Assert.Equal(Path.Combine(Root, "Rated", "3", "DSC_9.ARW"), plan.Entries[0].DestinationPath);
+    }
+
+    [Fact]
+    public void FlatMakesTwoCardsCollideWherePreserveDoesNot()
+    {
+        // The exact hazard the option introduces, stated as a test: the same file name in two
+        // subfolders is two distinct destinations under Preserve and one under Flat. The executor's
+        // rename is what resolves the Flat case - see FinishExecutorTests - but the planner is
+        // where the collision is created, so it is pinned here.
+        (string, CullState)[] photos =
+        [
+            (@"Card1\DSC_0001.ARW", new CullState(Flag.Picked, 0)),
+            (@"Card2\DSC_0001.ARW", new CullState(Flag.Picked, 0)),
+        ];
+
+        var preserved = PlanOf(FinishStructure.Preserve, photos).Entries
+            .Select(e => e.DestinationPath).ToList();
+        var flattened = PlanOf(FinishStructure.Flat, photos).Entries
+            .Select(e => e.DestinationPath).ToList();
+
+        Assert.Equal(2, preserved.Distinct(StringComparer.OrdinalIgnoreCase).Count());
+        Assert.Single(flattened.Distinct(StringComparer.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void FlatLeavesUntouchedPhotosAlone()
+    {
+        // Unrated stays put whatever the structure - it has no destination to flatten.
+        var plan = PlanOf(FinishStructure.Flat,
+            (@"Day1\DSC_0002.ARW", new CullState(Flag.Unflagged, 0)));
+
+        Assert.Equal(FinishBucket.Untouched, plan.Entries[0].Bucket);
+        Assert.Null(plan.Entries[0].DestinationPath);
+    }
+
+    [Fact]
+    public void FlatHandlesAPhotoAlreadyAtTheRoot()
+    {
+        var plan = PlanOf(FinishStructure.Flat, ("DSC_0003.ARW", new CullState(Flag.Rejected, 0)));
+
+        Assert.Equal(Path.Combine(Root, "Rejected", "DSC_0003.ARW"), plan.Entries[0].DestinationPath);
+    }
+
+    [Fact]
+    public void TheStructureIsNamedInTheDryRunLog()
+    {
+        // Whoever reads the log has to be able to tell which layout produced these destinations.
+        var flat = FinishPlanner.Render(
+            PlanOf(FinishStructure.Flat, (@"a\b.ARW", new CullState(Flag.Picked, 0))),
+            DateTimeOffset.UnixEpoch);
+
+        var preserved = FinishPlanner.Render(
+            PlanOf(FinishStructure.Preserve, (@"a\b.ARW", new CullState(Flag.Picked, 0))),
+            DateTimeOffset.UnixEpoch);
+
+        Assert.Contains("FLAT", flat, StringComparison.Ordinal);
+        Assert.Contains("PRESERVED", preserved, StringComparison.Ordinal);
+    }
 }

@@ -57,13 +57,33 @@ namespace Fastcull.Services
         /// leaves the sequence untouched - PRD 2.1.2 is explicit that a photo must not vanish from
         /// the filmstrip while surviving on disk.
         /// </summary>
-        public static bool TrySend(string filePath)
+        public static bool TrySend(string filePath) => TrySend(filePath, out _);
+
+        /// <summary>
+        /// As <see cref="TrySend(string)"/>, but reports why it failed.
+        ///
+        /// The diagnostic exists because the failure used to be invisible: a `Debug.WriteLine` and
+        /// a silent return, which from the user's chair is indistinguishable from the Delete key
+        /// not being wired up at all. SHFileOperation's own result code is the only thing that
+        /// says *why* - most usefully 0x20, the file being held open by another handle.
+        /// </summary>
+        public static bool TrySend(string filePath, out string diagnostic)
         {
-            if (string.IsNullOrWhiteSpace(filePath)) return false;
+            diagnostic = string.Empty;
+
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                diagnostic = "no path";
+                return false;
+            }
 
             try
             {
-                if (!File.Exists(filePath)) return false;
+                if (!File.Exists(filePath))
+                {
+                    diagnostic = "file does not exist";
+                    return false;
+                }
 
                 var op = new SHFILEOPSTRUCT
                 {
@@ -82,15 +102,42 @@ namespace Fastcull.Services
 
                 // Both have to hold: a non-zero result is a failure, and an aborted operation can
                 // still return zero. The existence check is the one that actually settles it.
-                if (result != 0 || op.fAnyOperationsAborted != 0) return false;
+                if (result != 0 || op.fAnyOperationsAborted != 0)
+                {
+                    diagnostic = $"SHFileOperation returned 0x{result:X} ({Explain(result)}), aborted={op.fAnyOperationsAborted != 0}";
+                    return false;
+                }
 
-                return !File.Exists(filePath);
+                if (File.Exists(filePath))
+                {
+                    diagnostic = "the API reported success but the file is still there";
+                    return false;
+                }
+
+                return true;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                diagnostic = ex.Message;
                 return false;
             }
         }
+
+        /// <summary>
+        /// The handful of SHFileOperation codes worth naming. It predates Win32 error codes and
+        /// returns its own set, so <c>Marshal.GetLastWin32Error</c> does not explain these.
+        /// </summary>
+        private static string Explain(int code) => code switch
+        {
+            0x7C => "DE_INVALIDFILES - bad path",
+            0x73 => "DE_ACCESSDENIEDSRC - access denied",
+            0x75 => "DE_OPCANCELLED - cancelled",
+            0x10000 => "ERRORONDEST - problem at the destination",
+            0x20 => "sharing violation - the file is open in another handle",
+            0x78 => "DE_ACCESSDENIED - access denied",
+            0x402 => "unknown path",
+            _ => "see SHFileOperation return codes",
+        };
 
         // ------------------------------------------------------------------
         // Restore (PRD 1.9's undo of a delete)

@@ -341,6 +341,58 @@ public sealed class FinishExecutorTests : IDisposable
     }
 
     [Fact]
+    public async Task FlatStructureCollidesOnEveryCardAndLosesNothing()
+    {
+        // PRD 4.2.2's hazard, end to end through the real planner rather than a hand-built plan:
+        // three cards each holding DSC_0001.ARW, flattened into one folder. All three must survive
+        // with their own bytes. This is the case that makes Flat worth testing separately - under
+        // Preserve these three never meet at all.
+        var a = WriteFile(Path.Combine("Card1", "DSC_0001.ARW"), 11_000, 41);
+        var b = WriteFile(Path.Combine("Card2", "DSC_0001.ARW"), 12_000, 42);
+        var c = WriteFile(Path.Combine("Card3", "DSC_0001.ARW"), 13_000, 43);
+
+        var plan = FinishPlanner.Plan(_root, FinishOperation.Copy, new[]
+        {
+            (a, Path.Combine("Card1", "DSC_0001.ARW"), Approved),
+            (b, Path.Combine("Card2", "DSC_0001.ARW"), Approved),
+            (c, Path.Combine("Card3", "DSC_0001.ARW"), Approved),
+        }, FinishStructure.Flat);
+
+        var report = await FinishExecutor.ExecuteAsync(plan, new SystemFinishFileSystem());
+
+        Assert.Equal(FinishOutcome.Completed, report.Outcome);
+        Assert.Equal(3, report.DoneCount);
+        Assert.Equal(2, report.RenamedCount);
+
+        var landed = Directory.GetFiles(Path.Combine(_root, "Approved"));
+        Assert.Equal(3, landed.Length);
+
+        // Every original is still readable somewhere in the output, byte for byte, and no two
+        // destinations hold the same content.
+        foreach (var source in new[] { a, b, c })
+            Assert.True(landed.Any(d => SameBytes(source, d)),
+                $"{Path.GetFileName(Path.GetDirectoryName(source))}'s bytes did not survive the flatten");
+
+        Assert.Equal(3, landed.Select(f => new FileInfo(f).Length).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task FlatStructureIsNamedInTheRunLog()
+    {
+        WriteFile(Path.Combine("Card1", "a.jpg"));
+
+        var plan = FinishPlanner.Plan(_root, FinishOperation.Copy,
+            new[] { (Path.Combine(_root, "Card1", "a.jpg"), Path.Combine("Card1", "a.jpg"), Approved) },
+            FinishStructure.Flat);
+
+        var report = await FinishExecutor.ExecuteAsync(plan, new SystemFinishFileSystem());
+
+        // A Flat run can rename dozens of files legitimately; the log has to say so, or the reader
+        // will take a wall of renames for a fault.
+        Assert.Contains("FLAT", FinishExecutor.RenderLog(report), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task RenamesAreRecordedInTheLog()
     {
         WriteFile("a.jpg");

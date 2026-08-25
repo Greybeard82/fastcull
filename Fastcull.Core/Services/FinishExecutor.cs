@@ -49,6 +49,13 @@ namespace Fastcull.Services
         public required FinishOutcome Outcome { get; init; }
         public required FinishOperation Operation { get; init; }
         public required string SourceRoot { get; init; }
+
+        /// <summary>
+        /// Carried from the plan so the log says which layout produced these destinations. Under
+        /// Flat a run can legitimately rename dozens of files, and a reader who does not know the
+        /// mode would read that as something having gone wrong.
+        /// </summary>
+        public FinishStructure Structure { get; init; } = FinishStructure.Preserve;
         public required IReadOnlyList<FinishFileResult> Results { get; init; }
         public required TimeSpan Elapsed { get; init; }
         public required long BytesWritten { get; init; }
@@ -398,6 +405,7 @@ namespace Fastcull.Services
             {
                 Outcome = outcome,
                 Operation = plan.Operation,
+                Structure = plan.Structure,
                 SourceRoot = plan.SourceRoot,
                 Results = results,
                 Elapsed = elapsed,
@@ -455,6 +463,7 @@ namespace Fastcull.Services
             sb.AppendLine($"Finished    : {DateTime.Now:yyyy-MM-dd HH:mm:ss zzz}");
             sb.AppendLine($"Source root : {report.SourceRoot}");
             sb.AppendLine($"Operation   : {report.Operation.ToString().ToUpperInvariant()}");
+            sb.AppendLine($"Structure   : {(report.Structure == FinishStructure.Flat ? "FLAT (subfolders discarded)" : "PRESERVED (source layout kept)")}");
             sb.AppendLine($"Outcome     : {report.Outcome.ToString().ToUpperInvariant()}");
             sb.AppendLine($"Elapsed     : {report.Elapsed.TotalSeconds:0.0} s");
             sb.AppendLine($"Written     : {Bytes(report.BytesWritten)}");

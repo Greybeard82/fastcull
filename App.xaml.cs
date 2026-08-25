@@ -111,6 +111,7 @@ namespace Fastcull
         {
             Diagnostics.ZoomTrace.Bind(Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread());
             Diagnostics.ZoomTrace.Reset("app launch");
+            Diagnostics.InputTrace.Reset("app launch");
 
             _window = new MainWindow();
             _window.Activate();

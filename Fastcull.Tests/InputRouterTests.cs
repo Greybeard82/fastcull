@@ -331,15 +331,50 @@ public class InputRouterTests
     public void EveryOtherCtrlChordIsSwallowed()
     {
         // Ctrl+S reaching the rating ladder would be a nasty surprise for a hand trained on every
-        // other application.
+        // other application. Z/Y are undo/redo and Left/Right are the ten-photo jump; nothing else
+        // may resolve to anything at all with Ctrl held.
         foreach (var key in System.Enum.GetValues<VirtualKey>())
         {
-            if (key is VirtualKey.Z or VirtualKey.Y) continue;
+            if (key is VirtualKey.Z or VirtualKey.Y or VirtualKey.Left or VirtualKey.Right) continue;
 
             foreach (var extended in new[] { true, false })
                 Assert.Equal(AppCommand.None,
                     InputRouter.Resolve(key, extended, isControlDown: true).Command);
         }
+    }
+
+    [Fact]
+    public void CtrlArrowsJumpTenPhotos()
+    {
+        Assert.Equal(AppCommand.JumpBackward,
+            InputRouter.Resolve(VirtualKey.Left, isExtendedKey: true, isControlDown: true).Command);
+        Assert.Equal(AppCommand.JumpForward,
+            InputRouter.Resolve(VirtualKey.Right, isExtendedKey: true, isControlDown: true).Command);
+
+        Assert.Equal(10, InputRouter.JumpSize);
+    }
+
+    [Fact]
+    public void CtrlNumpadArrowsDoNotJump()
+    {
+        // NumLock off sends numpad 4 and 6 as Left/Right with the extended bit clear. Those are
+        // digits, not arrows - the jump belongs to the grey keys only, and the unmodified numpad
+        // meaning (set 4 stars) must not leak through the Ctrl chord either.
+        Assert.Equal(AppCommand.None,
+            InputRouter.Resolve(VirtualKey.Left, isExtendedKey: false, isControlDown: true).Command);
+        Assert.Equal(AppCommand.None,
+            InputRouter.Resolve(VirtualKey.Right, isExtendedKey: false, isControlDown: true).Command);
+    }
+
+    [Fact]
+    public void CtrlArrowsAreNotPlainNavigation()
+    {
+        // The jump must not collapse into the single-step arrows, which is what would happen if the
+        // Ctrl block ever fell through to the main switch.
+        Assert.Equal(AppCommand.NavigatePrevious,
+            InputRouter.Resolve(VirtualKey.Left, isExtendedKey: true).Command);
+        Assert.Equal(AppCommand.NavigateNext,
+            InputRouter.Resolve(VirtualKey.Right, isExtendedKey: true).Command);
     }
 
     [Fact]

@@ -551,17 +551,32 @@ namespace Fastcull
 
         private void RootGrid_PreviewKeyDown(object sender, KeyRoutedEventArgs e)
         {
+            Diagnostics.InputTrace.Log("key down",
+                $"{e.Key} extended={e.KeyStatus.IsExtendedKey} shift={IsShiftDown()} ctrl={IsControlDown()} "
+                + $"focus={FocusManager.GetFocusedElement(Content.XamlRoot)?.GetType().Name ?? "none"}");
+
             // Let the focused control have the keystroke. Nothing is marked Handled here, so the
             // TextBox receives it exactly as it would in any other app.
-            if (IsTextEntryFocused()) return;
+            if (IsTextEntryFocused())
+            {
+                Diagnostics.InputTrace.Log("  BLOCKED by focus guard");
+                return;
+            }
 
             var resolved = InputRouter.Resolve(e.Key, e.KeyStatus.IsExtendedKey, IsShiftDown(), IsControlDown());
+            Diagnostics.InputTrace.Log("  resolved", $"{resolved.Command} payload={resolved.Payload}");
 
             // The finish confirmation is modal (PRD 4.2), so the cull is unreachable while it is
             // up. Escape still works - a modal with no way out is a trap - and it is routed
             // through the same dismiss chain as everywhere else.
+            //
+            // This guard is correct and stays. What was wrong was the screen outliving its own
+            // run: ConfirmFinishAsync only closed it after a Move, so a Copy left this swallowing
+            // the entire keyboard until the user found Escape. It was reported as "Delete is
+            // broken" because Delete was the key reached for first. See PRD 4.5.1.
             if (Filmstrip.ViewModel.IsFinishVisible && resolved.Command != AppCommand.ExitZoom)
             {
+                Diagnostics.InputTrace.Log("  BLOCKED by finish modal");
                 e.Handled = true;
                 return;
             }

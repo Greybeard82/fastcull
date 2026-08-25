@@ -199,6 +199,40 @@ namespace Fastcull.ViewModels
         public bool IsMoveChosen => FinishOperation == FinishOperation.Move;
         public bool IsCopyChosen => FinishOperation == FinishOperation.Copy;
 
+        private FinishStructure _finishStructure = FinishStructure.Preserve;
+
+        /// <summary>
+        /// PRD 4.2.2's layout choice. Unlike Move/Copy this one *does* have a default, and the
+        /// default is Preserve: it is the non-destructive reading of an ambiguous situation, since
+        /// preserving folders can never make two files collide that would not have collided anyway,
+        /// and flattening can. Nothing is overwritten either way - the executor's rename and its
+        /// CreateNew see to that - but Preserve keeps the renames rare.
+        /// </summary>
+        public FinishStructure FinishStructure
+        {
+            get => _finishStructure;
+            set
+            {
+                if (_finishStructure == value) return;
+                _finishStructure = value;
+                OnPropertyChanged(nameof(FinishStructure));
+                OnPropertyChanged(nameof(IsPreserveChosen));
+                OnPropertyChanged(nameof(IsFlatChosen));
+                OnPropertyChanged(nameof(PreserveBorderBrush));
+                OnPropertyChanged(nameof(PreserveTextBrush));
+                OnPropertyChanged(nameof(FlatBorderBrush));
+                OnPropertyChanged(nameof(FlatTextBrush));
+            }
+        }
+
+        public bool IsPreserveChosen => FinishStructure == FinishStructure.Preserve;
+        public bool IsFlatChosen => FinishStructure == FinishStructure.Flat;
+
+        public Microsoft.UI.Xaml.Media.Brush PreserveBorderBrush => ChoiceBrush(IsPreserveChosen, border: true);
+        public Microsoft.UI.Xaml.Media.Brush PreserveTextBrush => ChoiceBrush(IsPreserveChosen, border: false);
+        public Microsoft.UI.Xaml.Media.Brush FlatBorderBrush => ChoiceBrush(IsFlatChosen, border: true);
+        public Microsoft.UI.Xaml.Media.Brush FlatTextBrush => ChoiceBrush(IsFlatChosen, border: false);
+
         // Brushes resolved here rather than through converters, matching SidebarViewModel.PinBrush:
         // the theme dictionary stays the single source of colour, and the XAML stays declarative
         // without three new converter classes for one screen.
@@ -219,8 +253,18 @@ namespace Fastcull.ViewModels
         public Visibility FinishResultVisibility =>
             HasFinishResult ? Visibility.Visible : Visibility.Collapsed;
 
-        /// <summary>The gate on the Confirm button: a choice must be made, and no run in flight.</summary>
-        public bool CanConfirmFinish => FinishOperation != FinishOperation.None && !IsFinishRunning;
+        /// <summary>
+        /// The gate on the Confirm button: a choice must be made, no run in flight, and no result
+        /// already on screen.
+        ///
+        /// That last clause matters because the idle controls reappear when a run ends
+        /// (<see cref="FinishIdleVisibility"/> is simply the inverse of running). A screen that
+        /// survives its own run - which is now only the failure case - would otherwise offer a live
+        /// Confirm sitting directly under "Done", and pressing it would run the whole batch a
+        /// second time. Cancel and reopen to run again.
+        /// </summary>
+        public bool CanConfirmFinish =>
+            FinishOperation != FinishOperation.None && !IsFinishRunning && !HasFinishResult;
 
         private FinishPlan? _finishSummary;
 
@@ -261,6 +305,7 @@ namespace Fastcull.ViewModels
                 OnPropertyChanged(nameof(FinishResult));
                 OnPropertyChanged(nameof(HasFinishResult));
                 OnPropertyChanged(nameof(FinishResultVisibility));
+                OnPropertyChanged(nameof(CanConfirmFinish));
             }
         }
 
@@ -277,6 +322,11 @@ namespace Fastcull.ViewModels
 
             FinishOperation = FinishOperation.None;
             FinishResult = string.Empty;
+
+            // Reset alongside the operation, for the same reason: a remembered Flat from last time
+            // is a default wearing a disguise, and this one changes where every file lands.
+            FinishStructure = FinishStructure.Preserve;
+
             _finishSummary = BuildPlan(FinishOperation.None);
 
             NotifySummaryChanged();
@@ -293,7 +343,8 @@ namespace Fastcull.ViewModels
         private FinishPlan BuildPlan(FinishOperation operation) => FinishPlanner.Plan(
             CurrentFolder ?? string.Empty,
             operation,
-            Items.Select(i => (i.Photo.FilePath, i.Photo.RelativePath, i.CullState)));
+            Items.Select(i => (i.Photo.FilePath, i.Photo.RelativePath, i.CullState)),
+            FinishStructure);
 
         private void NotifySummaryChanged()
         {
@@ -393,17 +444,42 @@ namespace Fastcull.ViewModels
             IsFinishRunning = false;
             FinishResult = Describe(report);
 
-            // The sequence no longer matches the folder once files have moved out of it, so the
-            // session is reloaded from disk. PRD 4.1's model is "a reopened session is what is
-            // still here" - this makes that true immediately rather than at the next launch.
-            if (report.DoneCount > 0 && report.Operation == FinishOperation.Move && CurrentFolder is { } folder)
+            // ---- Back to the session (PRD 4.5) ----
+            //
+            // This used to fire only for a Move that had actually moved something. Every other
+            // ending - a Copy, or a Move with nothing to do - left IsFinishVisible true, and the
+            // window-level modal guard swallows every command except Escape while it is. The whole
+            // keyboard went dead, and since Delete is the key people reach for first, that is what
+            // "Delete is broken" turned out to be. Worse, the idle buttons come back when the run
+            // ends, so Confirm was live again and a second press would re-run the entire batch.
+            //
+            // So: any run that ended cleanly closes the screen and reloads the folder. The reload
+            // is what makes PRD 4.1's "a reopened session is what is still here" true immediately
+            // rather than at the next launch - after a Move the sorted photos have gone and the
+            // unrated ones remain to be finished, and after a Copy nothing has left, which is
+            // precisely what "originals stay" means.
+            //
+            // A run with failures keeps the screen, deliberately. The list of what did not go is
+            // the one thing the user has to read, and a toast is the wrong place for it.
+            if (report.FailedCount == 0 && report.Outcome is FinishOutcome.Completed or FinishOutcome.Cancelled)
             {
                 IsFinishVisible = false;
-                await OpenFolderAsync(folder).ConfigureAwait(true);
+                FinishOperation = FinishOperation.None;
+                FinishResult = string.Empty;
+
+                if (CurrentFolder is { } folder) await OpenFolderAsync(folder).ConfigureAwait(true);
+
+                // Raised after the reload so it survives it - the headline is all that is left of
+                // the result screen, and the run log holds the detail either way.
+                Toast(Headline(report));
             }
         }
 
-        private static string Describe(FinishRunReport report)
+        /// <summary>
+        /// The one-line version, shared by the result screen and the toast that replaces it on a
+        /// clean run. Written once so the two can never word the same outcome differently.
+        /// </summary>
+        private static string Headline(FinishRunReport report)
         {
             var verb = report.Operation == FinishOperation.Move ? "moved" : "copied";
 
@@ -415,10 +491,18 @@ namespace Fastcull.ViewModels
                 _ => $"Stopped. {report.DoneCount} {verb}; every original not yet processed is untouched.",
             };
 
-            var lines = new List<string> { headline };
+            // Renames are worth a word even in the short form, and much more so under Flat, where
+            // they are expected rather than exceptional (PRD 4.2.2).
+            return report.RenamedCount > 0
+                ? $"{headline} {report.RenamedCount} renamed to avoid overwriting."
+                : headline;
+        }
+
+        private static string Describe(FinishRunReport report)
+        {
+            var lines = new List<string> { Headline(report) };
 
             if (report.Message is not null) lines.Add(report.Message);
-            if (report.RenamedCount > 0) lines.Add($"{report.RenamedCount} renamed to avoid overwriting an existing file.");
             if (report.FailedCount > 0) lines.Add($"{report.FailedCount} could not be processed.");
             if (report.FailureReportPath is not null) lines.Add($"Details: {report.FailureReportPath}");
             if (report.LogPath is not null) lines.Add($"Log: {report.LogPath}");
@@ -928,6 +1012,17 @@ namespace Fastcull.ViewModels
         public void MoveLast() => SetActiveIndex(Items.Count - 1);
 
         /// <summary>
+        /// PRD 2.1.1's ten-photo jump, bound to Ctrl + Left / Right.
+        ///
+        /// Clamps rather than wraps, which is the same rule the arrow keys already follow -
+        /// SetActiveIndex does the clamping, so a jump from photo 3 lands on the first and a jump
+        /// near the end lands on the last. Wrapping would make a key held down cycle the shoot
+        /// forever with no way to tell you had passed the end.
+        /// </summary>
+        public void JumpBackward() => SetActiveIndex(ActiveIndex - InputRouter.JumpSize);
+        public void JumpForward() => SetActiveIndex(ActiveIndex + InputRouter.JumpSize);
+
+        /// <summary>
         /// Applies a resolved input command. Navigation changes only the cursor; rating changes
         /// only the active item's state. The two never affect each other (PRD 2.1, D.2).
         /// </summary>
@@ -939,6 +1034,9 @@ namespace Fastcull.ViewModels
                 case AppCommand.NavigateNext: MoveNext(); break;
                 case AppCommand.NavigateFirst: MoveFirst(); break;
                 case AppCommand.NavigateLast: MoveLast(); break;
+
+                case AppCommand.JumpBackward: JumpBackward(); break;
+                case AppCommand.JumpForward: JumpForward(); break;
 
                 case AppCommand.LadderUp: ApplyRating(s => s.Up()); break;
                 case AppCommand.LadderDown: ApplyRating(s => s.Down()); break;
@@ -1194,11 +1292,21 @@ namespace Fastcull.ViewModels
         /// </summary>
         private bool RemovePhoto(FilmstripItemViewModel item, int index)
         {
-            if (!RecycleBin.TrySend(item.Photo.FilePath))
+            Diagnostics.InputTrace.Log("RemovePhoto",
+                $"{item.Photo.FileName} pinned={item.IsPinned} exists={System.IO.File.Exists(item.Photo.FilePath)}");
+
+            if (!RecycleBin.TrySend(item.Photo.FilePath, out var why))
             {
-                System.Diagnostics.Debug.WriteLine($"[FastCull] Could not recycle {item.Photo.FilePath}");
+                Diagnostics.InputTrace.Log("  RECYCLE FAILED", why);
+                System.Diagnostics.Debug.WriteLine($"[FastCull] Could not recycle {item.Photo.FilePath}: {why}");
+
+                // Said out loud rather than swallowed. A silent return is indistinguishable from
+                // the Delete key not being wired up, which is exactly how this was reported.
+                Toast($"Could not delete {item.Photo.FileName} - {why}");
                 return false;
             }
+
+            Diagnostics.InputTrace.Log("  recycled OK");
 
             // Located rather than assumed: a redo runs against a sequence that has been through an
             // undo, so the recorded index is a hint, not a fact.
@@ -1224,6 +1332,12 @@ namespace Fastcull.ViewModels
                 StageItems.Clear();
                 ActiveIndex = -1;
                 ActiveItem = null;
+
+                // Deleting the last photo left this false, so the stage stayed visible over an
+                // empty sequence and the empty-state message never appeared. ReinsertPhoto already
+                // clears it on the way back; this is the matching half.
+                IsEmpty = true;
+
                 Sidebar.SetActivePhoto(null);
                 RefreshTally();
                 RebuildFolderViews();
