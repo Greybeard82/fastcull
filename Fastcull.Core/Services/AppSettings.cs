@@ -10,6 +10,29 @@ namespace Fastcull.Services
     {
         [JsonPropertyName("lastFolder")]
         public string? LastFolder { get; set; }
+
+        /// <summary>
+        /// PRD 1.8.2's reverse geocoding. **Off unless the user turns it on**, which is a
+        /// deliberate default rather than caution: the feature fills one optional metadata field,
+        /// the app degrades to raw coordinates without it, and every lookup is a request against a
+        /// donated community service. Shipping it on would put load there on behalf of users who
+        /// mostly will not notice the field either way.
+        /// </summary>
+        [JsonPropertyName("geocodingEnabled")]
+        public bool GeocodingEnabled { get; set; }
+
+        /// <summary>
+        /// The reverse-geocoding endpoint. **Configurable because Nominatim's usage policy
+        /// requires it**: an application must be able to switch away from the public instance at
+        /// the operator's request *"without requiring a software update"*. A compiled-in constant
+        /// cannot do that - every installed copy would keep calling the old endpoint until someone
+        /// shipped a new build, which is exactly the situation the clause exists to prevent.
+        ///
+        /// Null means "use the default". Any Nominatim-compatible endpoint can be substituted,
+        /// including a self-hosted instance or a commercial provider.
+        /// </summary>
+        [JsonPropertyName("geocodingEndpoint")]
+        public string? GeocodingEndpoint { get; set; }
     }
 
     /// <summary>
@@ -87,19 +110,32 @@ namespace Fastcull.Services
         }
 
         /// <summary>
-        /// Records the folder to reopen next launch. Returns false if it could not be written,
-        /// which callers may log but must not treat as a failure of the folder open itself.
+        /// The whole settings file, or defaults when there is none. Never throws.
         /// </summary>
-        public static bool SetLastFolder(string? folderPath)
+        public static AppSettingsData Read()
+        {
+            try
+            {
+                if (!File.Exists(SettingsPath)) return new AppSettingsData();
+
+                return JsonSerializer.Deserialize<AppSettingsData>(File.ReadAllText(SettingsPath))
+                       ?? new AppSettingsData();
+            }
+            catch (Exception)
+            {
+                // Malformed JSON, a partially written file, a locked file - all read as defaults
+                // rather than as an error worth surfacing.
+                return new AppSettingsData();
+            }
+        }
+
+        /// <summary>Writes the whole file. Returns false if it could not be written.</summary>
+        public static bool Write(AppSettingsData data)
         {
             try
             {
                 Directory.CreateDirectory(RootDirectory);
-
-                var json = JsonSerializer.Serialize(
-                    new AppSettingsData { LastFolder = folderPath }, SerializerOptions);
-
-                File.WriteAllText(SettingsPath, json);
+                File.WriteAllText(SettingsPath, JsonSerializer.Serialize(data, SerializerOptions));
                 return true;
             }
             catch (Exception)
@@ -107,5 +143,46 @@ namespace Fastcull.Services
                 return false;
             }
         }
+
+        /// <summary>
+        /// Records the folder to reopen next launch. Returns false if it could not be written,
+        /// which callers may log but must not treat as a failure of the folder open itself.
+        ///
+        /// **Read-modify-write, not a fresh object.** This used to serialise
+        /// <c>new AppSettingsData { LastFolder = … }</c>, which was harmless while the file held
+        /// one field and would silently erase every other setting the moment it held two.
+        /// </summary>
+        public static bool SetLastFolder(string? folderPath)
+        {
+            var data = Read();
+            data.LastFolder = folderPath;
+            return Write(data);
+        }
+
+        /// <summary>PRD 1.8.2. False unless the user has turned geocoding on.</summary>
+        public static bool GeocodingEnabled => Read().GeocodingEnabled;
+
+        public static bool SetGeocodingEnabled(bool enabled)
+        {
+            var data = Read();
+            data.GeocodingEnabled = enabled;
+            return Write(data);
+        }
+
+        /// <summary>
+        /// The configured endpoint, or the default when none is set. Callers get a usable value
+        /// either way, so nothing has to special-case a fresh install.
+        /// </summary>
+        public static string GeocodingEndpoint
+        {
+            get
+            {
+                var configured = Read().GeocodingEndpoint;
+                return string.IsNullOrWhiteSpace(configured) ? DefaultGeocodingEndpoint : configured!;
+            }
+        }
+
+        /// <summary>Where lookups go unless settings.json says otherwise.</summary>
+        public const string DefaultGeocodingEndpoint = "https://nominatim.openstreetmap.org/reverse";
     }
 }

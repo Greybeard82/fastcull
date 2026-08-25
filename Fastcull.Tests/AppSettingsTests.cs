@@ -10,7 +10,96 @@ namespace Fastcull.Tests;
 /// these run against the same %LOCALAPPDATA% path the app uses, and a test that clobbered a
 /// developer's remembered folder would be an unpleasant surprise.
 /// </summary>
-public class AppSettingsTests : IDisposable
+public partial class AppSettingsTests : IDisposable
+{
+    // ---- Geocoding settings (PRD 1.8.2) ----
+
+    [Fact]
+    public void GeocodingIsOffOnAFreshInstall()
+    {
+        // The default that keeps a donated service from being called on behalf of users who never
+        // asked for the feature.
+        File.Delete(AppSettings.SettingsPath);
+
+        Assert.False(AppSettings.GeocodingEnabled);
+    }
+
+    [Fact]
+    public void TheEndpointFallsBackToTheDefaultWhenUnset()
+    {
+        File.Delete(AppSettings.SettingsPath);
+
+        Assert.Equal(AppSettings.DefaultGeocodingEndpoint, AppSettings.GeocodingEndpoint);
+        Assert.StartsWith("https://", AppSettings.GeocodingEndpoint);
+    }
+
+    [Fact]
+    public void TheEndpointCanBeSwitchedWithoutRecompiling()
+    {
+        // Nominatim's policy requires being able to switch away from the public instance without
+        // a software update. This is that requirement, as a test.
+        AppSettings.Write(new AppSettingsData { GeocodingEndpoint = "https://geocoder.example/reverse" });
+
+        Assert.Equal("https://geocoder.example/reverse", AppSettings.GeocodingEndpoint);
+    }
+
+    [Fact]
+    public void SettingTheFolderDoesNotEraseTheGeocodingSettings()
+    {
+        // SetLastFolder used to serialise a fresh object, which was harmless with one field in the
+        // file and silently destructive with two. This is the regression guard for that.
+        AppSettings.Write(new AppSettingsData
+        {
+            LastFolder = @"C:\before",
+            GeocodingEnabled = true,
+            GeocodingEndpoint = "https://geocoder.example/reverse",
+        });
+
+        AppSettings.SetLastFolder(@"C:\after");
+
+        var after = AppSettings.Read();
+        Assert.Equal(@"C:\after", after.LastFolder);
+        Assert.True(after.GeocodingEnabled);
+        Assert.Equal("https://geocoder.example/reverse", after.GeocodingEndpoint);
+    }
+
+    [Fact]
+    public void EnablingGeocodingDoesNotEraseTheLastFolder()
+    {
+        AppSettings.Write(new AppSettingsData { LastFolder = @"C:\photos" });
+
+        AppSettings.SetGeocodingEnabled(true);
+
+        var after = AppSettings.Read();
+        Assert.True(after.GeocodingEnabled);
+        Assert.Equal(@"C:\photos", after.LastFolder);
+    }
+
+    [Fact]
+    public void AMalformedFileReadsAsDefaultsRatherThanThrowing()
+    {
+        Directory.CreateDirectory(AppSettings.RootDirectory);
+        File.WriteAllText(AppSettings.SettingsPath, "{ this is not json");
+
+        var data = AppSettings.Read();
+
+        Assert.False(data.GeocodingEnabled);
+        Assert.Null(data.LastFolder);
+        Assert.Equal(AppSettings.DefaultGeocodingEndpoint, AppSettings.GeocodingEndpoint);
+    }
+
+    [Fact]
+    public void TheUserAgentIsAccurateAndOffersAContactRoute()
+    {
+        // Nominatim asks for identification and a way to be contacted. It must also not claim
+        // something that would stop being true - the previous string said "personal use".
+        Assert.DoesNotContain("personal", NominatimPlaceResolver.UserAgent, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("FastCull", NominatimPlaceResolver.UserAgent);
+        Assert.Contains("https://", NominatimPlaceResolver.UserAgent);
+    }
+}
+
+public partial class AppSettingsTests
 {
     private readonly string? _originalJson;
     private readonly bool _existedBefore;

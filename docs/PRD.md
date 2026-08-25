@@ -2,7 +2,7 @@
 
 **Version:** 1.3
 **Target Platform:** Windows 11 (x64, native)
-**Tech Stack:** C# / .NET 9, WinUI 3 (Windows App SDK), WIC + LibRaw dual decoder, SQLite (file-backed, WAL)
+**Tech Stack:** C# / .NET 9, WinUI 3 (Windows App SDK), WIC (RAW via embedded-preview extraction — no LibRaw, no debayer; §3.2), SQLite (file-backed, WAL)
 **Dev Baseline:** Intel Core i5-12400, 32 GB RAM, 8 GB VRAM, NVMe SSD
 **Primary Test Corpus:** Sony A7C II `.ARW` (7008 x 4672, 33 MP), mixed with JPEG and PNG exports
 
@@ -397,6 +397,20 @@ Resolving a place name from GPS coordinates is the **first and currently only** 
 - **No GPS is the common case.** Most files carry no GPS at all. Those omit the field entirely, per §1.5.
 
 If reverse geocoding ever needs to become more than this — batch prefetching, a paid provider, a persistent on-disk cache — that is a decision to take explicitly, not to drift into.
+
+##### The terms of the service are part of the contract
+
+Added 2026-08-25 after a commercial-viability audit (`docs/COMMERCIAL-AUDIT.md`) checked Nominatim's usage policy against what the code actually did. Three of these were compliance gaps, not preferences.
+
+- **Off by default.** Geocoding runs only when `geocodingEnabled` is set in `settings.json`. The feature fills one optional field and already degrades to raw coordinates, so shipping it on would put load on a donated community service on behalf of users who would mostly not notice the field either way. The check happens per lookup, so toggling it takes effect on the next photo rather than the next launch.
+- **The endpoint is configuration, not a constant.** Nominatim's policy requires that an application can be switched away from the public instance at the operator's request *"without requiring a software update"*. A compiled-in `const` cannot satisfy that — every installed copy would keep calling the old endpoint until a new build shipped, which for a distributed desktop app could be never. `geocodingEndpoint` in `settings.json` overrides it; any Nominatim-compatible endpoint works, including a self-hosted instance or a commercial provider.
+- **The User-Agent identifies the app honestly and offers a contact route.** The policy refuses unidentified clients. The string previously claimed *"personal use"* — a statement made to the operator of a free service that would have become false the moment the app was sold. It now describes what the software is and where to find whoever is responsible for it, which is accurate now and stays accurate.
+- **At most one request per second**, enforced in the resolver rather than left to chance, with the rounded-coordinate cache keeping the real rate far below it.
+- **ODbL attribution wherever a resolved name is displayed** — the sidebar's Active Photo panel and §1.8.1's on-photo overlay both carry `© OpenStreetMap contributors`.
+
+  **Bound to the name, not to the row.** The Place row also shows raw `lat, long` read from the file's own EXIF when geocoding is off, pending, or failed. No OpenStreetMap data is involved in that, and crediting OSM for the camera's own GPS reading would be a false attribution rather than a cautious one. The credit appears if and only if a resolved name is on screen.
+
+**Commercial use of the public instance is not itself prohibited** — the policy's restriction is on applications *whose primary function is geocoding*, which FastCull is not. The obligations above are about load, switchability, honest identification and attribution, and they apply regardless of whether the app is ever sold.
 
 ### 1.9 Undo — built
 
@@ -1095,7 +1109,11 @@ public enum CompanionKind { Raw, Jpeg, Heif, Xmp, Other }
 - `System.Threading.Channels` (in-box)
 - Test stack, test project only, not shipped: `xunit`, `xunit.runner.visualstudio`, `Microsoft.NET.Test.Sdk`
 
-Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate commercial option. Fine for personal use, needs revisiting if this is ever sold.
+~~Licensing note: LibRaw is dual licensed LGPL 2.1 / CDDL 1.0 with a separate commercial option. Fine for personal use, needs revisiting if this is ever sold.~~
+
+**Struck 2026-08-25 — disproven, not merely unlikely.** The audit in `docs/COMMERCIAL-AUDIT.md` settled it four ways: no `PackageReference` to any RAW library in any of the four projects; no RAW decoder among the 20 packages in the shipped dependency closure; no matching native binary among the 278 DLLs in the portable build; and `RawPreviewDecoder` imports only `Windows.Graphics.Imaging` and `System.IO`. **There is no LGPL, CDDL or GPL code in the shipped product**, so there is nothing here to revisit if it is sold.
+
+The licensing risk that *does* exist is one this section never named: `XmpCore`, a transitive dependency of `MetadataExtractor` that ships, is published under a custom Adobe XMP Library License rather than an OSI licence. See the audit.
 
 ---
 

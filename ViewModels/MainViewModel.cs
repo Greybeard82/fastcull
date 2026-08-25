@@ -480,6 +480,11 @@ namespace Fastcull.ViewModels
         /// </summary>
         private void ResolvePlace(FilmstripItemViewModel item)
         {
+            // PRD 1.8.2: off unless the user asked for it. Checked here rather than at startup so
+            // toggling the setting takes effect on the next photo instead of the next launch, and
+            // so no request is ever made on behalf of a user who left it off.
+            if (!AppSettings.GeocodingEnabled) return;
+
             if (item.Photo.Latitude is not double lat || item.Photo.Longitude is not double lon) return;
             if (!string.IsNullOrWhiteSpace(item.PlaceName)) return;
 

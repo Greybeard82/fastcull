@@ -276,6 +276,14 @@
                                                        Visibility="{x:Bind PlaceVisibility, Mode=OneWay}"
                                                        FontSize="10"
                                                        Foreground="{StaticResource Accent300Brush}"/>
+                                            <!-- ODbL attribution, required wherever OSM-derived
+                                                 data is shown. Bound to its own visibility, not
+                                                 the row's: the row also carries raw EXIF
+                                                 coordinates, which owe OpenStreetMap nothing. -->
+                                            <TextBlock Text="© OpenStreetMap contributors"
+                                                       Visibility="{x:Bind PlaceAttributionVisibility, Mode=OneWay}"
+                                                       FontSize="8"
+                                                       Foreground="{StaticResource Neutral700Brush}"/>
                                             <!-- The exposure triplet. No Visibility binding on
                                                  purpose: these three ALWAYS render, showing "-"
                                                  when the file has no figure, which is PRD 1.8.1's

@@ -66,7 +66,7 @@ public class FinishPlannerTests
 
         Assert.Equal(1, plan.ApprovedCount);
 
-        var approved = Assert.Single(plan.Entries.Where(e => e.Bucket == FinishBucket.Approved));
+        var approved = Assert.Single(plan.Entries, e => e.Bucket == FinishBucket.Approved);
         Assert.Equal("picked-plain.cr2", approved.RelativePath);
     }
 

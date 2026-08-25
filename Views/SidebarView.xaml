@@ -279,6 +279,12 @@
                         <TextBlock Text="PLACE" Style="{StaticResource InfoLabel}"/>
                         <TextBlock Text="{x:Bind ViewModel.ActivePhoto.PlaceText, Mode=OneWay}"
                                    Style="{StaticResource InfoValue}"/>
+                        <!-- ODbL attribution. Its own visibility, not the row's: the row also
+                             shows raw EXIF coordinates, which are not OSM data. -->
+                        <TextBlock Text="© OpenStreetMap contributors"
+                                   Visibility="{x:Bind ViewModel.ActivePhoto.PlaceAttributionVisibility, Mode=OneWay}"
+                                   FontSize="8" Margin="0,1,0,0"
+                                   Foreground="{StaticResource Neutral800Brush}"/>
                     </StackPanel>
 
                     <!-- The exposure triplet, reading the same properties the on-photo overlay

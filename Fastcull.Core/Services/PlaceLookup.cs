@@ -174,7 +174,15 @@ namespace Fastcull.Services
     /// </summary>
     public sealed class NominatimPlaceResolver : IPlaceResolver, IDisposable
     {
-        private const string Endpoint = "https://nominatim.openstreetmap.org/reverse";
+        /// <summary>
+        /// Read from settings on construction, NOT a compiled-in constant.
+        ///
+        /// Nominatim's usage policy requires that an application be able to switch away from the
+        /// public instance at the operator's request *"without requiring a software update"*. A
+        /// `const` could not satisfy that: every installed copy would keep calling the old
+        /// endpoint until a new build shipped, which for a distributed desktop app could be never.
+        /// </summary>
+        private readonly string _endpoint;
 
         /// <summary>Nominatim asks for at most one request per second from a single client.</summary>
         private static readonly TimeSpan MinimumInterval = TimeSpan.FromSeconds(1);
@@ -183,16 +191,28 @@ namespace Fastcull.Services
         private readonly SemaphoreSlim _rateGate = new(1, 1);
         private DateTime _lastRequestUtc = DateTime.MinValue;
 
-        public NominatimPlaceResolver(HttpClient? http = null)
+        /// <summary>
+        /// Identifies the application and offers a route to contact whoever runs it, which is what
+        /// Nominatim's policy asks for. Not cosmetic: unidentified clients are refused.
+        ///
+        /// **It no longer claims "personal use".** The previous string did, which was a statement
+        /// made to the operator of a free service about how the software is used - and one that
+        /// would become false the moment the app was sold. Describing what the software is, and
+        /// where to find whoever is responsible for it, is both accurate today and stays accurate.
+        /// </summary>
+        public const string UserAgent = "FastCull/0.1 (photo culling tool; +https://github.com/Greybeard82/fastcull)";
+
+        /// <param name="endpoint">
+        /// Overrides the configured endpoint. Used by tests; production passes null and picks up
+        /// whatever settings.json says.
+        /// </param>
+        public NominatimPlaceResolver(HttpClient? http = null, string? endpoint = null)
         {
+            _endpoint = string.IsNullOrWhiteSpace(endpoint) ? AppSettings.GeocodingEndpoint : endpoint!;
             _http = http ?? new HttpClient();
 
             if (!_http.DefaultRequestHeaders.Contains("User-Agent"))
-            {
-                // Identifies the app, per Nominatim's policy. Not cosmetic: unidentified clients
-                // are blocked.
-                _http.DefaultRequestHeaders.Add("User-Agent", "FastCull/0.1 (photo culling tool; personal use)");
-            }
+                _http.DefaultRequestHeaders.Add("User-Agent", UserAgent);
         }
 
         public async Task<string?> ResolveAsync(double latitude, double longitude, CancellationToken cancellationToken)
@@ -200,7 +220,7 @@ namespace Fastcull.Services
             await ThrottleAsync(cancellationToken).ConfigureAwait(false);
 
             var url = string.Create(CultureInfo.InvariantCulture,
-                $"{Endpoint}?format=jsonv2&zoom=10&addressdetails=1&lat={latitude:F6}&lon={longitude:F6}");
+                $"{_endpoint}?format=jsonv2&zoom=10&addressdetails=1&lat={latitude:F6}&lon={longitude:F6}");
 
             using var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return null;

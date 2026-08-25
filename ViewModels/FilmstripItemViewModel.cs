@@ -251,6 +251,7 @@ namespace Fastcull.ViewModels
         [ObservableProperty]
         [NotifyPropertyChangedFor(nameof(PlaceText))]
         [NotifyPropertyChangedFor(nameof(PlaceVisibility))]
+        [NotifyPropertyChangedFor(nameof(PlaceAttributionVisibility))]
         private string? _placeName;
 
         public string PlaceText
@@ -266,6 +267,22 @@ namespace Fastcull.ViewModels
         }
 
         public Visibility PlaceVisibility => Field(PlaceText);
+
+        /// <summary>
+        /// ODbL attribution for the place name, required wherever OSM-derived data is displayed.
+        /// </summary>
+        public const string PlaceAttribution = "© OpenStreetMap contributors";
+
+        /// <summary>
+        /// Shown **only when a resolved name is on screen**, not merely whenever the place row is.
+        ///
+        /// That distinction is the point rather than a nicety: with geocoding off, or before a
+        /// lookup lands, or when one fails, the row falls back to raw coordinates read out of the
+        /// file's own EXIF. No OpenStreetMap data is involved in that, and crediting OSM for the
+        /// camera's own GPS reading would be a false attribution rather than a cautious one.
+        /// </summary>
+        public Visibility PlaceAttributionVisibility =>
+            string.IsNullOrWhiteSpace(PlaceName) ? Visibility.Collapsed : Visibility.Visible;
 
         /// <summary>
         /// Where the photo lives: the path relative to the scan root when it sits in a subfolder,
