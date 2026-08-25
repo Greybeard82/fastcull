@@ -46,6 +46,27 @@ namespace Fastcull
 
             InitializeSidebar();
             InitializeSessions();
+            StartPerfSnapshots();
+        }
+
+        private Microsoft.UI.Dispatching.DispatcherQueueTimer? _perfTimer;
+
+        /// <summary>
+        /// Ticks a pipeline snapshot into the perf trace while FASTCULL_PERFTRACE=1.
+        ///
+        /// On a timer rather than on a keypress because the whole question is what the pipeline
+        /// looks like once input has STOPPED - a snapshot triggered by pressing a key is a snapshot
+        /// of a moment that is not quiet.
+        /// </summary>
+        private void StartPerfSnapshots()
+        {
+            if (!Fastcull.Diagnostics.PerfTrace.Enabled) return;
+
+            _perfTimer = DispatcherQueue.CreateTimer();
+            _perfTimer.Interval = TimeSpan.FromSeconds(1);
+            _perfTimer.IsRepeating = true;
+            _perfTimer.Tick += (_, _) => Filmstrip.ViewModel.LogPerfSnapshot("tick");
+            _perfTimer.Start();
         }
 
         // ------------------------------------------------------------------

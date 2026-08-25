@@ -809,13 +809,22 @@ namespace Fastcull.Views
         /// </summary>
         private void ThumbRepeater_ElementPrepared(ItemsRepeater sender, ItemsRepeaterElementPreparedEventArgs args)
         {
+            Fastcull.Diagnostics.PerfTrace.Count("ElementPrepared");
+
             if (args.Index >= 0 && args.Index < ViewModel.Items.Count)
                 ViewModel.Items[args.Index].BeginThumbnailLoad();
         }
 
         private void ThumbRepeater_ElementClearing(ItemsRepeater sender, ItemsRepeaterElementClearingEventArgs args)
         {
+            // GetElementIndex during ElementClearing is the thing under suspicion: if the repeater
+            // has already dissociated the element by the time this fires, it returns -1, the cancel
+            // never happens, and every thumbnail ever scrolled past stays queued at the gate.
             var index = sender.GetElementIndex(args.Element);
+
+            Fastcull.Diagnostics.PerfTrace.Count("ElementClearing");
+            if (index < 0) Fastcull.Diagnostics.PerfTrace.Count("ElementClearing UNRESOLVED (-1)");
+
             if (index >= 0 && index < ViewModel.Items.Count)
                 ViewModel.Items[index].CancelThumbnailLoad();
         }

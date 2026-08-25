@@ -976,6 +976,38 @@ namespace Fastcull.ViewModels
         /// <summary>Sliding window, bounded pool and LRU eviction (PRD 3.3).</summary>
         private readonly PrefetchCoordinator _prefetch = new();
 
+        /// <summary>
+        /// Reports what the decode pipeline is actually holding, for the "photos stay unloaded
+        /// after scrolling stops" investigation. Cheap, and a no-op unless FASTCULL_PERFTRACE=1.
+        ///
+        /// The number that matters is <c>stranded</c>: items that were asked for a thumbnail, have
+        /// no pixels, and have nothing in flight. Nothing will ask again - the only thing that asks
+        /// is a container being realized, and theirs already is - so a non-zero count here once
+        /// everything has gone quiet is the reported bug, stated as a measurement.
+        /// </summary>
+        public void LogPerfSnapshot(string reason)
+        {
+            if (!Diagnostics.PerfTrace.Enabled) return;
+
+            int thumbs = 0, thumbStranded = 0, thumbInFlight = 0, display = 0, displayStranded = 0;
+
+            foreach (var item in Items)
+            {
+                if (item.Thumbnail is not null) thumbs++;
+                if (item.IsThumbnailStranded) thumbStranded++;
+                if (item.IsThumbnailInFlight) thumbInFlight++;
+                if (item.DisplayImage is not null) display++;
+                if (item.IsDisplayStranded) displayStranded++;
+            }
+
+            Diagnostics.PerfTrace.Snapshot(reason,
+                $"items={Items.Count} active={ActiveIndex} window={PrefetchRange.Start}-{PrefetchRange.EndInclusive} "
+                + $"| thumbs={thumbs} stranded={thumbStranded} inflight={thumbInFlight} "
+                + $"| display={display} displayStranded={displayStranded} "
+                + $"| gate waiting={Services.DecodeGate.Waiting} inflight={Services.DecodeGate.InFlight} "
+                + $"| residentMB={_prefetch.ResidentBytes / (1024.0 * 1024.0):F0}");
+        }
+
         /// <summary>Resident decoded bytes at the last cursor move. Surfaced for the perf harness.</summary>
         public long ResidentBytes => _prefetch.ResidentBytes;
 

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -32,22 +33,74 @@ namespace Fastcull.Services
         /// <summary>Decodes currently holding a slot. Exposed for tests and the perf harness.</summary>
         public static int InFlight => MaxConcurrency - Gate.CurrentCount;
 
+        private static int _waiting;
+
+        /// <summary>
+        /// Requests admitted but not yet holding a slot. This is the number the "scrolling leaves
+        /// photos unloaded" report turns on: if it is still large once the user has stopped
+        /// scrolling, the gate is working through a backlog for photos nobody is looking at, and
+        /// the visible ones are queued behind it.
+        /// </summary>
+        public static int Waiting => Volatile.Read(ref _waiting);
+
         /// <summary>
         /// Runs one decode under the cap. Cancellation is honoured while WAITING for a slot - a
         /// photo that leaves the prefetch window before its turn comes up never decodes at all,
         /// which is the whole point of cancelling on window exit.
         /// </summary>
-        public static async Task<T?> RunAsync<T>(Func<Task<T?>> decode, CancellationToken cancellationToken)
+        public static Task<T?> RunAsync<T>(Func<Task<T?>> decode, CancellationToken cancellationToken)
+            => RunAsync(decode, cancellationToken, label: null);
+
+        /// <param name="label">
+        /// Only used by <see cref="Diagnostics.PerfTrace"/>, and only when it is switched on.
+        /// </param>
+        public static async Task<T?> RunAsync<T>(Func<Task<T?>> decode, CancellationToken cancellationToken,
+                                                 string? label)
         {
-            await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            Interlocked.Increment(ref _waiting);
+
+            var queuedAt = Diagnostics.PerfTrace.Enabled ? Stopwatch.GetTimestamp() : 0L;
+            var admitted = false;
+
             try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                return await decode().ConfigureAwait(false);
+                await Gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+                admitted = true;
+                Interlocked.Decrement(ref _waiting);
+
+                try
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (!Diagnostics.PerfTrace.Enabled) return await decode().ConfigureAwait(false);
+
+                    var waitMs = Stopwatch.GetElapsedTime(queuedAt).TotalMilliseconds;
+                    var startedAt = Stopwatch.GetTimestamp();
+
+                    var result = await decode().ConfigureAwait(false);
+
+                    var decodeMs = Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds;
+                    Diagnostics.PerfTrace.Log("decode done",
+                        $"{label} wait={waitMs:F0}ms decode={decodeMs:F0}ms waiting={Waiting} inflight={InFlight}");
+                    Diagnostics.PerfTrace.Count("decodes completed");
+
+                    return result;
+                }
+                finally
+                {
+                    Gate.Release();
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Diagnostics.PerfTrace.Count("decodes cancelled at gate");
+                throw;
             }
             finally
             {
-                Gate.Release();
+                // Only if the wait itself threw - the admitted path already decremented, and
+                // decrementing twice would make Waiting drift negative over a session.
+                if (!admitted) Interlocked.Decrement(ref _waiting);
             }
         }
     }

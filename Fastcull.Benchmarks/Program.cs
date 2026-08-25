@@ -23,6 +23,21 @@ namespace Fastcull.Benchmarks
             {
                 var repoRoot = FindRepoRoot();
                 var corpus = ArgValue(args, "--corpus") ?? Path.Combine(repoRoot, "SampleImages");
+
+                // A focused decode-cost measurement rather than the full PRD 3.5 harness. Added for
+                // the slow-hardware investigation, where the question is what one decode costs as a
+                // function of the size asked for - which the full harness averages away.
+                if (args.Contains("--decode-curve"))
+                {
+                    if (!Directory.Exists(corpus))
+                    {
+                        Console.Error.WriteLine($"Corpus not found: {corpus}");
+                        return 2;
+                    }
+
+                    var n = int.TryParse(ArgValue(args, "--samples"), out var parsed) ? parsed : 12;
+                    return await DecodeCurve.RunAsync(corpus, n).ConfigureAwait(false);
+                }
                 var outPath = ArgValue(args, "--out")
                     ?? Path.Combine(repoRoot, "docs", "benchmarks", "2026-08-23-baseline.md");
 

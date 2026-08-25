@@ -143,24 +143,57 @@ namespace Fastcull.ViewModels
         /// </summary>
         public void BeginThumbnailLoad()
         {
-            if (!IsDecodable || _thumbnailStarted) return;
+            if (!IsDecodable) return;
+
+            if (_thumbnailStarted)
+            {
+                // Distinguishes "already has pixels" from "asked again while a request is still
+                // outstanding". Only the second can strand an item, and only if that outstanding
+                // request never completes.
+                Diagnostics.PerfTrace.Count(Thumbnail is null
+                    ? "thumb begin SKIPPED (started, no pixels)"
+                    : "thumb begin skipped (loaded)");
+                return;
+            }
 
             _thumbnailStarted = true;
             _thumbnailCts = new CancellationTokenSource();
+            Diagnostics.PerfTrace.Count("thumb begin");
+            Diagnostics.PerfTrace.Log("thumb begin", $"[{Index}] {Photo.FileName} waiting={Services.DecodeGate.Waiting}");
             _ = LoadThumbnailAsync(_thumbnailCts.Token);
         }
 
         /// <summary>Cancels an in-flight thumbnail decode when its container is recycled.</summary>
         public void CancelThumbnailLoad()
         {
-            if (_thumbnailCts is null) return;
+            if (_thumbnailCts is null)
+            {
+                Diagnostics.PerfTrace.Count("thumb cancel NO-OP (no cts)");
+                return;
+            }
 
             _thumbnailCts.Cancel();
             _thumbnailCts.Dispose();
             _thumbnailCts = null;
 
             if (Thumbnail is null) _thumbnailStarted = false;
+
+            Diagnostics.PerfTrace.Count("thumb cancel");
+            Diagnostics.PerfTrace.Log("thumb cancel", $"[{Index}] {Photo.FileName} hadPixels={Thumbnail is not null}");
         }
+
+        /// <summary>
+        /// True when this item has been asked for a thumbnail, has no pixels, and has nothing in
+        /// flight to produce any. An item in this state is stranded: nothing will ask again, because
+        /// the only thing that asks is the container being realized, and it already is.
+        /// </summary>
+        public bool IsThumbnailStranded => IsDecodable && _thumbnailStarted && Thumbnail is null && _thumbnailCts is null;
+
+        /// <summary>As <see cref="IsThumbnailStranded"/>, for the prefetch-driven display tier.</summary>
+        public bool IsDisplayStranded => IsDecodable && _displayStarted && DisplayImage is null && _displayCts is null;
+
+        /// <summary>Whether a thumbnail request is outstanding - started, with a live token.</summary>
+        public bool IsThumbnailInFlight => _thumbnailStarted && _thumbnailCts is not null && Thumbnail is null;
 
         /// <summary>
         /// Drops the decoded images so the GC can reclaim them, and allows a later reload.
@@ -1037,7 +1070,9 @@ namespace Fastcull.ViewModels
                 }
 
                 return DecodeRawWithFallbackAsync(displayTier, cancellationToken);
-            }, cancellationToken);
+            }, cancellationToken, Diagnostics.PerfTrace.Enabled
+                ? $"{(displayTier ? "display" : "thumb")}[{Index}]"
+                : null);
         }
 
         private async Task<SoftwareBitmap?> DecodeRawWithFallbackAsync(bool displayTier, CancellationToken cancellationToken)
@@ -1059,13 +1094,16 @@ namespace Fastcull.ViewModels
             {
                 var bitmap = await DecodeTierAsync(displayTier: false, cancellationToken);
                 await ApplyDecodeResultAsync(bitmap, b => Thumbnail = b, () => ThumbnailFailed = true);
+                Diagnostics.PerfTrace.Count(bitmap is null ? "thumb result NULL" : "thumb landed");
             }
             catch (OperationCanceledException)
             {
                 // Superseded/torn down before the decode finished - not a failure, just stop.
+                Diagnostics.PerfTrace.Count("thumb task cancelled");
             }
             catch (Exception)
             {
+                Diagnostics.PerfTrace.Count("thumb task FAILED");
                 _dispatcherQueue.TryEnqueue(() => { try { ThumbnailFailed = true; } catch { } });
             }
         }

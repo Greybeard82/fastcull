@@ -187,8 +187,14 @@
                                     <!-- Rating indicators, drawn ON the photo so they are present
                                          in the stage, while zoomed, and (scaled down) on the
                                          thumbnails. Transparent when unflagged, so an unrated
-                                         photo carries no mark at all. -->
-                                    <Border Height="6" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+                                         photo carries no mark at all.
+
+                                         12px, doubled from 6: at 6 the bar was legible at a desk
+                                         and invisible from across a room on a 65" 4K panel, which
+                                         is a real way this app gets used. Height is the only thing
+                                         that changed - the bar is overlaid on the photo rather
+                                         than occupying layout, so nothing else moves. -->
+                                    <Border Height="12" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
                                             Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource ThumbMark}}"/>
 
                                     <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
@@ -416,9 +422,14 @@
                                                    Visibility="{x:Bind ThumbnailFailedVisibility, Mode=OneWay}"/>
 
                                         <!-- Same two indicators as the stage, scaled to a 150px
-                                             slot: a 3px bar rather than 6, and a 10px badge that
-                                             stays legible without dominating the thumbnail. -->
-                                        <Border Height="3" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
+                                             slot: a 6px bar rather than 12, and a 10px badge that
+                                             stays legible without dominating the thumbnail.
+
+                                             Kept at half the stage's height so the two read as the
+                                             same mark at two sizes. 6px of a ~100px thumbnail is
+                                             about a sixteenth of it - present at a glance down the
+                                             strip, still not competing with the photograph. -->
+                                        <Border Height="6" VerticalAlignment="Bottom" HorizontalAlignment="Stretch"
                                                 Background="{x:Bind CullState, Mode=OneWay, Converter={StaticResource ThumbMark}}"/>
 
                                         <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
